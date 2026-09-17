@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <title>AI Video Surveillance System</title>
+    <meta name="description" content="AI-powered intelligent video surveillance system with real-time object detection, behavior analysis, and alert management." />
+    <meta property="og:title" content="AI Video Surveillance System" />
+    <meta property="og:description" content="Real-time AI-powered surveillance with YOLOv8 object detection and behavior analysis." />
+    <meta property="og:type" content="website" />
+    <script>
+      // Prevent flash of wrong theme
+      (function() {
+        const theme = localStorage.getItem('theme') || 'dark';
+        if (theme === 'dark') document.documentElement.classList.add('dark');
+        else document.documentElement.classList.remove('dark');
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

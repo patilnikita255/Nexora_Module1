@@ -1,0 +1,87 @@
+# ===========================
+# Python / Backend
+# ===========================
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+pip-log.txt
+venv/
+.venv/
+env/
+ENV/
+.env
+.mypy_cache/
+.ruff_cache/
+*.pt
+
+# User Data
+.docs/
+.test-videos/
+
+# Keep backend data directories but ignore generated files inside
+!backend/uploads/
+!backend/snapshots/
+!backend/weights/
+backend/uploads/*
+backend/snapshots/*
+backend/weights/*
+!backend/uploads/.gitkeep
+!backend/snapshots/.gitkeep
+!backend/weights/.gitkeep
+
+# ===========================
+# Node / Frontend
+# ===========================
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+.pnpm-store
+
+# Builds
+dist/
+dist-ssr/
+frontend/dist/
+frontend/dist-ssr/
+
+# Vite / React local env
+*.local
+frontend/.env
+
+# ===========================
+# IDE / OS / Editor
+# ===========================
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*~
+.DS_Store
+Thumbs.db
+
+# ===========================
+# Gemini
+# ===========================
+.gemini/
