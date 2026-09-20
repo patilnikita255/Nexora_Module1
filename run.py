@@ -15,10 +15,24 @@ import sys
 import time
 import webbrowser
 import threading
+import subprocess
 from pathlib import Path
 
-# Set working directory to backend/
+# Ensure execution inside the project's virtual environment
 ROOT_DIR = Path(__file__).resolve().parent
+candidate_venvs = [
+    ROOT_DIR / "backend" / "venv" / "Scripts" / "python.exe",
+    ROOT_DIR / "backend" / ".venv" / "Scripts" / "python.exe",
+    ROOT_DIR / "venv" / "Scripts" / "python.exe",
+    ROOT_DIR / ".venv" / "Scripts" / "python.exe",
+]
+venv_python = next((p for p in candidate_venvs if p.is_file()), None)
+
+if venv_python and Path(sys.executable).resolve() != venv_python.resolve():
+    print(f"[Launcher] Launching via virtual environment: {venv_python}")
+    sys.exit(subprocess.call([str(venv_python), str(Path(__file__).resolve())] + sys.argv[1:]))
+
+# Set working directory to backend/
 BACKEND_DIR = ROOT_DIR / "backend"
 if BACKEND_DIR.is_dir():
     os.chdir(str(BACKEND_DIR))
