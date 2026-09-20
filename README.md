@@ -266,39 +266,50 @@ Dashboard opens at: **http://localhost:8080**
 
 ---
 
-## Alert Behavior & Update Rules
+## Alert Behavior & Decision Criteria
 
-Alerts are designed to be stable and practical. The system does not raise an alert from one random frame. It waits, verifies, and then shows alerts only when behavior is consistent.
+Alerts are designed to be stable, intelligent, and practical. The system does not raise an alert from a single noisy frame. It verifies persistence and context across frames before alerting.
 
-### 1. Loitering Alert
-- Raised when a person stays in the same monitored area longer than the configured limit.
-- The system checks this for a short period before confirming, to reduce false alarms.
-- If the person keeps staying longer, alert seriousness may increase.
-- Alert card includes person ID and how long they have remained.
+### 1. Suspicious Loitering vs. Safe Waiting Discrimination
+The loitering engine distinguishes between genuine suspicious activity and benign waiting:
 
-### 2. Restricted Zone (Intrusion) Alert
-- Raised when a person enters the restricted area.
-- The person must remain there briefly before the alert is confirmed.
-- This avoids instant alerts from quick edge crossings.
-- If the person keeps staying in the restricted area, the severity can move from medium to high/critical.
-- Alert card includes person ID and time spent in the zone.
+- **Safe Waiting (Loitering Alert Suppressed):**
+  1. **Designated Waiting Zones:** Person is standing inside an authorized area or waiting lounge (`EXCLUDED` zone type).
+  2. **Social Companion Presence:** Person is accompanied by another individual (center distance $< 130$ pixels) — e.g. waiting together, talking, or meeting someone.
+  3. **Calm Stationary Waiting:** Person is standing peacefully in place ($D_{total} < 60$ px, $D_{net} < 40$ px) without anxious pacing.
+  4. **Directional Transit:** Person is walking with a clear trajectory across the area in a consistent direction ($D_{total} \approx D_{net}$).
 
-### 3. Unattended Object Alert
-- Applies to bags and similar carry items (backpack, handbag, suitcase).
-- Raised when an item is left without a nearby person for the configured duration.
-- The system waits and confirms over multiple checks before creating the alert.
-- If the item remains unattended longer, severity can increase.
-- Alert card includes object ID and unattended duration.
+- **Suspicious Loitering (Alert Triggered):**
+  1. **Dwell Time Threshold:** Person lingers alone in the area for $\ge 15$ seconds.
+  2. **Restless Pacing Ratio:** Total path traveled is significantly higher than net displacement ($D_{total} / \max(30, D_{net}) \ge 2.0$), indicating back-and-forth movement.
+  3. **Direction Reversals:** At least 3 turnaround vector changes along the path.
+  4. **Perimeter Casing:** Lingering within 120 pixels of a restricted zone perimeter without entering.
+  5. **Composite Suspicion Score:** Overall calculated score $\ge 0.65$.
 
-### 4. Alert Deduplication and Cooldown
-- The same alert for the same object is not repeated continuously.
-- After an alert is raised, a cooldown period is applied before another similar one can appear.
-- This keeps the panel readable and prevents alert spam.
+### 2. Weapon Detection & Class Reconciliation (Guns vs. Knives)
+- **Specialized Firearm Model:** Evaluates frames synchronously with base detection.
+- **Accurate Disambiguation:** Resolves the issue where standard COCO models misclassified guns as knives due to missing gun classes in standard 80-class COCO. Compares model confidences and prioritizes specialized firearm classifications.
+- **Support Checking:** Verifies held weapon proximity to tracked individuals without requiring unrealistic tight IoU constraints.
 
-### 5. When Alerts Appear in UI
-- Alerts refresh automatically every few seconds.
-- New alerts are added to the list without removing older ones.
-- Each alert shows useful context: time, severity, related object ID, duration, confidence, and snapshot (if available).
+### 3. Restricted Zone (Intrusion) Alert
+- Raised when an unauthorized person breaches a restricted perimeter.
+- Dwell time verification prevents false positives from momentary edge passes.
+- Escalates dynamically from Medium $\to$ High $\to$ Critical severity with continued persistence.
+
+### 4. Unattended Object Alert
+- Continuously monitors carry items (backpack, handbag, suitcase).
+- Tracks whether the item's previous carrier or any nearby person moves outside the proximity threshold.
+- Triggers alert once left isolated longer than configured unattended seconds.
+
+### 5. Notifications with Bold Critical Level & Explicit Reasons
+- Every alert generated across **all features** includes:
+  - **CRITICAL LEVEL:** Prominently formatted in **BOLD** (e.g. `CRITICAL`, `HIGH`, `MEDIUM`).
+  - **REASON FOR ALERT:** Clear, plain-English explanation explaining exactly why the event triggered.
+- Delivered via:
+  - **Email:** Rich HTML with alert cards and plain-text fallback with attached snapshot evidence.
+  - **SMS:** Immediate alert text with critical level, reason, and timestamp.
+  - **Web Dashboards:** Highlighted badges and incident cards.
+- **Deduplication:** 60-second cooldown window prevents duplicate alerts or notification spam for the same incident.
 
 ---
 

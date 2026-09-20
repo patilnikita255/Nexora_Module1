@@ -995,6 +995,7 @@
           <button class="filter-tab active" id="tabAll" onclick="setAlertFilter('all')">All (<span id="countFilterAll">0</span>)</button>
           <button class="filter-tab" id="tabWeapon" onclick="setAlertFilter('weapon_detected')">🔪 Weapons (<span id="countFilterWeapons">0</span>)</button>
           <button class="filter-tab" id="tabUnattended" onclick="setAlertFilter('unattended_object')">🎒 Unattended Items (<span id="countFilterUnattended">0</span>)</button>
+          <button class="filter-tab" id="tabLoitering" onclick="setAlertFilter('loitering')">🚶 Suspicious Loitering (<span id="countFilterLoitering">0</span>)</button>
         </div>
 
         <div id="alertsList" class="alerts-list">
@@ -1185,12 +1186,43 @@
     let cachedAlerts = [];
     let wasZoneBreached = false;
 
+    // Helper to extract concise reason
+    function getAlertReason(alert) {
+      const type = (alert.alert_type || '').toLowerCase();
+      const dur = Math.round(alert.duration_seconds || 0);
+      if (type === 'weapon_detected') {
+        const msg = (alert.message || '').toLowerCase();
+        if (msg.includes('knife')) return 'Edged weapon (Knife) identified in surveillance FOV.';
+        if (msg.includes('gun') || msg.includes('firearm') || msg.includes('pistol')) return 'Lethal firearm (Gun) identified in surveillance FOV.';
+        return 'Dangerous weapon identified in camera view.';
+      }
+      if (type === 'intrusion') {
+        const zone = alert.zone_name || 'Restricted Zone';
+        return `Unauthorized person entered ${zone} and persisted for ${dur}s.`;
+      }
+      if (type === 'unattended_object') {
+        let owner = '';
+        if (alert.message && alert.message.includes('Owner:')) {
+          owner = ' (Owner: ' + alert.message.split('Owner:')[1].split(')')[0].trim() + ')';
+        }
+        return `Unattended luggage/bag left without nearby owner for ${dur}s${owner}.`;
+      }
+      if (type === 'loitering') {
+        if (alert.message && alert.message.includes('[') && alert.message.includes(']')) {
+          return 'Restless pacing: ' + alert.message.split('[')[1].split(']')[0];
+        }
+        return `Person lingering alone in area for ${dur}s exceeding threshold.`;
+      }
+      return alert.message;
+    }
+
     // Filter selector
     function setAlertFilter(filter) {
       currentAlertFilter = filter;
       document.querySelectorAll('.filter-tab').forEach(tab => tab.classList.remove('active'));
       const activeId = filter === 'all' ? 'tabAll' : 
-                       filter === 'weapon_detected' ? 'tabWeapon' : 'tabUnattended';
+                       filter === 'weapon_detected' ? 'tabWeapon' : 
+                       filter === 'unattended_object' ? 'tabUnattended' : 'tabLoitering';
       const activeTab = document.getElementById(activeId);
       if (activeTab) activeTab.classList.add('active');
       renderAlertsList();
@@ -1239,14 +1271,17 @@
 
       const weaponAlerts = alerts.filter(a => a.alert_type === 'weapon_detected');
       const unattendedAlerts = alerts.filter(a => a.alert_type === 'unattended_object');
+      const loiteringAlerts = alerts.filter(a => a.alert_type === 'loitering');
 
       // Update badge counters on filter tabs
       const cAll = document.getElementById('countFilterAll');
       const cWeap = document.getElementById('countFilterWeapons');
       const cUnattended = document.getElementById('countFilterUnattended');
+      const cLoitering = document.getElementById('countFilterLoitering');
       if (cAll) cAll.innerText = alerts.length;
       if (cWeap) cWeap.innerText = weaponAlerts.length;
       if (cUnattended) cUnattended.innerText = unattendedAlerts.length;
+      if (cLoitering) cLoitering.innerText = loiteringAlerts.length;
 
       // Render Sidebar Alert Feed based on Active Filter
       const list = document.getElementById('alertsList');
@@ -1255,6 +1290,7 @@
       let filtered = alerts;
       if (currentAlertFilter === 'weapon_detected') filtered = weaponAlerts;
       else if (currentAlertFilter === 'unattended_object') filtered = unattendedAlerts;
+      else if (currentAlertFilter === 'loitering') filtered = loiteringAlerts;
 
       if (filtered.length === 0) {
         list.innerHTML = `<div class="empty-state">No incidents in this category.</div>`;
@@ -1263,6 +1299,7 @@
 
       list.innerHTML = filtered.map(alert => {
         const sevClass = (alert.severity || 'medium').toLowerCase();
+        const sevUpper = (alert.severity || 'CRITICAL').toUpperCase();
         const snapUrl = alert.snapshot_url ? (alert.snapshot_url.startsWith('http') ? alert.snapshot_url : `${API_BASE}${alert.snapshot_url}`) : (alert.snapshot_path ? `${API_BASE}/api/snapshots/${alert.snapshot_path}` : null);
         const snapshotHtml = snapUrl ? `
           <img class="snapshot-thumb" src="${snapUrl}" 
@@ -1274,9 +1311,12 @@
           <div class="alert-card ${sevClass}">
             <div class="alert-card-header">
               <span class="alert-type">${(alert.alert_type || 'ALERT').toUpperCase().replace('_', ' ')}</span>
-              <span class="alert-severity severity-${sevClass}">${alert.severity}</span>
+              <span class="alert-severity severity-${sevClass}"><b>CRITICAL LEVEL: ${sevUpper}</b></span>
             </div>
-            <div class="alert-message">${alert.message}</div>
+            <div style="margin: 6px 0 6px 0; font-size: 11px; line-height: 1.4; color: #fbbf24;">
+              <b>REASON:</b> <span style="color: #f1f5f9; font-weight: 500;">${getAlertReason(alert)}</span>
+            </div>
+            <div class="alert-message" style="font-size: 11px; color: var(--text-muted);">${alert.message}</div>
             <div class="alert-footer">
               <span>⏱️ ${Math.round(alert.duration_seconds || 0)}s duration</span>
               <span>${formatTime(alert.timestamp)}</span>

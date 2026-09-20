@@ -49,6 +49,13 @@ class BehaviorAnalyzer:
         self._bag_owner: Dict[int, int] = {}
         self._bag_last_pos: Dict[int, Tuple[int, int, float]] = {}  # (cx, cy, timestamp)
 
+        # Feature 4: Suspicious Loitering vs Safe Waiting tracking
+        self.loitering_threshold = float(getattr(settings, "loitering_threshold_seconds", 15))
+        self.loitering_suspicion_threshold = float(getattr(settings, "loitering_suspicion_threshold", 0.65))
+        self._loitering_entry_time: Dict[int, float] = {}
+        self._loitering_positions: Dict[int, List[Tuple[int, int, float]]] = {}  # pid -> [(x, y, t)]
+        self._loitering_persistence: Dict[int, int] = {}
+
     @property
     def intrusion_zone(self) -> Tuple[float, float, float, float]:
         """Backward compatibility: coordinates of the first active restricted zone."""
@@ -87,6 +94,9 @@ class BehaviorAnalyzer:
         self._unattended_persistence.clear()
         self._bag_owner.clear()
         self._bag_last_pos.clear()
+        self._loitering_entry_time.clear()
+        self._loitering_positions.clear()
+        self._loitering_persistence.clear()
 
     def analyze(
         self,
@@ -314,6 +324,172 @@ class BehaviorAnalyzer:
                 self._unattended_start_time.pop(bid, None)
                 self._unattended_persistence.pop(bid, None)
 
+        # =====================================================================
+        # Feature 4 — Suspicious Loitering Detection (vs Safe Waiting)
+        # =====================================================================
+        loitering_events = self._analyze_suspicious_loitering(
+            persons, active_excluded, active_restricted, frame_width, frame_height, now
+        )
+        events.extend(loitering_events)
+
+        return events
+
+    def _analyze_suspicious_loitering(
+        self,
+        persons: List[TrackedObject],
+        active_excluded: List[ZoneConfig],
+        active_restricted: List[ZoneConfig],
+        frame_width: int,
+        frame_height: int,
+        now: float,
+    ) -> List[BehaviorEvent]:
+        """
+        Differentiate Suspicious Loitering from Legitimate/Safe Waiting.
+
+        DECISION CRITERIA:
+        1. SAFE / NORMAL WAITING (Suppresses Alert):
+           - In designated waiting / public seating zone (EXCLUDED zone).
+           - Waiting with someone / social interaction: Another person within 130px.
+           - Passive stationary waiting: Person remains essentially stationary (< 50px net displacement,
+             < 80px total path over threshold, e.g. sitting or waiting quietly).
+           - Normal transit: Passerby with directional persistence exiting within normal duration.
+
+        2. SUSPICIOUS LOITERING (Triggers Alert):
+           - Restless Pacing: High cumulative path distance with low net displacement (ratio >= 2.0).
+           - Direction Reversals: Person reverses direction back and forth 3+ times in a small radius.
+           - Perimeter Casing: Lingering near the boundary (< 120px) of an active restricted zone.
+           - Dwell Time: Remaining alone in an unmonitored open area >= loitering_threshold (15s).
+        """
+        events: List[BehaviorEvent] = []
+
+        for person in persons:
+            pid = person.track_id
+            pcx, pcy = person.center_x, person.center_y
+
+            # 1. Check if person is in a designated waiting / excluded zone
+            is_in_waiting_zone = False
+            for ex in active_excluded:
+                ez = self._get_zone_pixel_box(ex.coords, frame_width, frame_height)
+                if self._point_in_zone(pcx, person.bbox.y2, ez) or self._point_in_zone(pcx, pcy, ez):
+                    is_in_waiting_zone = True
+                    break
+
+            if is_in_waiting_zone:
+                self._loitering_entry_time.pop(pid, None)
+                self._loitering_positions.pop(pid, None)
+                self._loitering_persistence.pop(pid, None)
+                continue
+
+            # 2. Check for companions / group waiting (another person within 130px)
+            has_companion = False
+            for other in persons:
+                if other.track_id == pid:
+                    continue
+                dist = ((pcx - other.center_x) ** 2 + (pcy - other.center_y) ** 2) ** 0.5
+                if dist < 130.0:
+                    has_companion = True
+                    break
+
+            if has_companion:
+                self._loitering_entry_time.pop(pid, None)
+                self._loitering_positions.pop(pid, None)
+                self._loitering_persistence.pop(pid, None)
+                continue
+
+            # 3. Track position history
+            entry_time = self._loitering_entry_time.setdefault(pid, now)
+            dwell_time = now - entry_time
+
+            positions = self._loitering_positions.setdefault(pid, [])
+            positions.append((pcx, pcy, now))
+            cutoff = now - 35.0
+            positions = [p for p in positions if p[2] >= cutoff]
+            self._loitering_positions[pid] = positions
+
+            if dwell_time < self.loitering_threshold:
+                continue
+
+            if len(positions) < 3:
+                continue
+
+            # 4. Behavioral motion analysis over trajectory
+            total_path = 0.0
+            turnarounds = 0
+            prev_dx = 0.0
+
+            for i in range(1, len(positions)):
+                dx = positions[i][0] - positions[i - 1][0]
+                dy = positions[i][1] - positions[i - 1][1]
+                step = (dx * dx + dy * dy) ** 0.5
+                total_path += step
+                if abs(dx) > 8:
+                    if prev_dx != 0.0 and (dx * prev_dx) < 0:
+                        turnarounds += 1
+                    prev_dx = dx
+
+            start_pos = positions[0]
+            net_disp = (
+                (pcx - start_pos[0]) ** 2 + (pcy - start_pos[1]) ** 2
+            ) ** 0.5
+            pacing_ratio = total_path / max(30.0, net_disp)
+
+            # Check proximity to any restricted boundary (casing behavior)
+            is_near_restricted = False
+            for rz in active_restricted:
+                rx1, ry1, rx2, ry2 = self._get_zone_pixel_box(rz.coords, frame_width, frame_height)
+                dx_rect = max(rx1 - pcx, 0, pcx - rx2)
+                dy_rect = max(ry1 - pcy, 0, pcy - ry2)
+                dist_to_boundary = (dx_rect * dx_rect + dy_rect * dy_rect) ** 0.5
+                if dist_to_boundary < 120.0:
+                    is_near_restricted = True
+                    break
+
+            # 5. Compute suspicion score
+            suspicion = 0.20
+            reasons = []
+
+            if pacing_ratio >= 2.0 and total_path >= 80.0:
+                suspicion += 0.35
+                reasons.append(f"restless pacing (ratio {pacing_ratio:.1f})")
+
+            if turnarounds >= 3:
+                suspicion += 0.20
+                reasons.append(f"{turnarounds} direction reversals")
+
+            if is_near_restricted:
+                suspicion += 0.25
+                reasons.append("lingering near restricted boundary")
+
+            # Passive stationary waiting penalty (calm standing or sitting)
+            if total_path < 60.0 and net_disp < 40.0:
+                suspicion -= 0.35
+
+            suspicion = max(0.0, min(1.0, suspicion))
+
+            if suspicion >= self.loitering_suspicion_threshold:
+                count = self._loitering_persistence.get(pid, 0) + 1
+                self._loitering_persistence[pid] = count
+
+                severity = AlertSeverity.HIGH if dwell_time >= self.loitering_threshold * 2 else AlertSeverity.MEDIUM
+                reason_str = ", ".join(reasons) if reasons else "unauthorized lingering"
+                msg = (
+                    f"Suspicious Loitering: Person (ID:{pid}) observed for {dwell_time:.0f}s. "
+                    f"Suspicion Score: {suspicion:.0%} [{reason_str}]."
+                )
+
+                events.append(
+                    BehaviorEvent(
+                        event_type=AlertType.LOITERING,
+                        severity=severity,
+                        message=msg,
+                        involved_objects=[pid],
+                        primary_object_id=pid,
+                        duration_seconds=round(dwell_time, 1),
+                        confidence=round(suspicion, 3),
+                        frame_count=count,
+                    )
+                )
+
         return events
 
     def _cleanup_missing_tracks(
@@ -342,6 +518,12 @@ class BehaviorAnalyzer:
                 self._unattended_start_time.pop(bid, None)
                 self._unattended_persistence.pop(bid, None)
                 self._bag_last_pos.pop(bid, None)
+
+        for pid in list(self._loitering_entry_time.keys()):
+            if pid not in person_ids:
+                self._loitering_entry_time.pop(pid, None)
+                self._loitering_positions.pop(pid, None)
+                self._loitering_persistence.pop(pid, None)
 
     @staticmethod
     def _get_zone_pixel_box(

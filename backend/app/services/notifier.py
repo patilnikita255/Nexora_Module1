@@ -105,6 +105,12 @@ def _send_with_retry(send_fn, alert: Alert, snapshot_path: Optional[str],
     )
 
 
+# Notification deduplication cache: (event_type, object_id, severity) -> last_sent_timestamp
+_recent_notifications: dict[tuple[str, str, str], float] = {}
+_NOTIFY_COOLDOWN_SECONDS = 60.0
+_dedup_lock = threading.Lock()
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -114,16 +120,8 @@ def send_alert_notification(
     snapshot_path: Optional[str] = None,
 ) -> None:
     """
-    Enqueue an alert for background notification delivery.
-
-    This is the single entry point that AlertManager (and any future caller)
-    should use. Returns immediately — actual sending happens on the worker
-    thread.
-
-    Args:
-        alert: The Alert object to notify about.
-        snapshot_path: Optional absolute path to the snapshot JPEG to attach
-                       to the email.
+    Enqueue an alert for background notification delivery with strict deduplication.
+    Prevents repeated notifications for the same event within the cooldown window.
     """
     settings = get_settings()
 
@@ -133,6 +131,23 @@ def send_alert_notification(
             alert.id,
         )
         return
+
+    # Anti-duplication check
+    dedup_key = (
+        alert.alert_type.value,
+        str(alert.object_id or ""),
+        alert.severity.value.lower(),
+    )
+    now = time.time()
+    with _dedup_lock:
+        last_sent = _recent_notifications.get(dedup_key, 0.0)
+        if now - last_sent < _NOTIFY_COOLDOWN_SECONDS:
+            logger.info(
+                "[Notifier] Suppressing duplicate notification for %s (sent %.1fs ago).",
+                dedup_key, now - last_sent,
+            )
+            return
+        _recent_notifications[dedup_key] = now
 
     _start_worker_if_needed()
 
@@ -146,7 +161,7 @@ def send_alert_notification(
 
 
 # ---------------------------------------------------------------------------
-# Email channel (smtplib — stdlib, no extra dependency)
+# Email & SMS Formatting (Bold Critical Level & Exact Reasons)
 # ---------------------------------------------------------------------------
 
 def _friendly_alert_title(alert: Alert) -> str:
@@ -164,120 +179,163 @@ def _friendly_alert_title(alert: Alert) -> str:
         return f"Unauthorized Perimeter Intrusion{zone_str}"
     elif atype == "unattended_object":
         return "Unattended Object Detected (Owner Left Area)"
+    elif atype == "loitering":
+        return "Suspicious Loitering Detected"
 
-    titles = {
-        "loitering": "Suspicious Loitering Detected",
-        "suspicious_activity": "Suspicious Activity Detected",
-    }
-    return titles.get(atype, "Security Alert")
+    return "Security Alert"
 
 
-def _friendly_severity(alert: Alert) -> str:
-    """Map severity to a human-readable urgency level."""
-    levels = {
-        "low": "Low Priority - For your awareness",
-        "medium": "Medium Priority - Please review when possible",
-        "high": "High Priority - Requires prompt attention",
-        "critical": "CRITICAL - Immediate action required",
-    }
-    return levels.get(alert.severity.value, alert.severity.value.upper())
+def _extract_reason(alert: Alert) -> str:
+    """Extract a concise, authoritative reason for the alert."""
+    atype = alert.alert_type.value
+    dur = int(alert.duration_seconds)
+
+    if atype == "weapon_detected":
+        msg_lower = alert.message.lower()
+        if "knife" in msg_lower:
+            return "Edged weapon (knife) identified in video feed; immediate safety hazard."
+        elif any(w in msg_lower for w in ("gun", "firearm", "pistol", "rifle")):
+            return "Lethal firearm identified in video feed; active armed threat protocol triggered."
+        return "Unlicensed dangerous weapon identified in monitored area."
+    elif atype == "intrusion":
+        zone_str = f"'{alert.zone_name}'" if alert.zone_name else "restricted security perimeter"
+        return f"Unauthorized person entered protected zone {zone_str} and persisted for {dur}s without clearance."
+    elif atype == "unattended_object":
+        owner_part = ""
+        if "Owner:" in alert.message:
+            owner_part = f" (previously carried by {alert.message.split('Owner:')[1].split(')')[0].strip()})"
+        return f"Bag/item left isolated with no person nearby for {dur}s{owner_part}."
+    elif atype == "loitering":
+        if "[" in alert.message and "]" in alert.message:
+            details = alert.message.split("[")[1].split("]")[0]
+            return f"Restless wandering without legitimate purpose for {dur}s ({details})."
+        return f"Person lingering alone in open/monitored area for {dur}s exhibiting casing/pacing patterns."
+
+    return alert.message
 
 
 def _friendly_description(alert: Alert) -> str:
-    """Generate a plain-English description based on alert type."""
+    """Generate detailed plain-English context for the incident."""
     atype = alert.alert_type.value
     dur = int(alert.duration_seconds)
 
     if atype == "intrusion":
-        zone_str = f"the restricted area '{alert.zone_name}'" if alert.zone_name else "a restricted or off-limits zone"
+        zone_str = f"the restricted area '{alert.zone_name}'" if alert.zone_name else "a restricted zone"
         return (
-            f"A person (ID:{alert.object_id or 'Unknown'}) has breached {zone_str} and has "
-            f"remained inside for {dur} seconds. Please verify authorization immediately."
+            f"Person (ID:{alert.object_id or 'Unknown'}) breached {zone_str} and has "
+            f"remained inside for {dur} seconds. Immediate physical verification required."
         )
     elif atype == "unattended_object":
         owner_info = ""
         if "Owner:" in alert.message:
             owner_part = alert.message.split("Owner:")[1].split(")")[0].strip()
-            owner_info = f" The item was previously associated with {owner_part}, who has now walked away."
+            owner_info = f" The item was previously associated with {owner_part}, who walked away."
         return (
-            f"A bag or personal item has been left unattended for {dur} seconds with no owner nearby.{owner_info} "
-            f"Please inspect the item for security compliance."
+            f"A bag or container has been left unattended for {dur} seconds with no owner nearby.{owner_info} "
+            f"Please inspect for security compliance."
         )
     elif atype == "weapon_detected":
-        msg_lower = alert.message.lower()
-        if "knife" in msg_lower:
-            weapon_str = "a KNIFE (edged weapon)"
-        elif any(w in msg_lower for w in ("gun", "firearm", "pistol", "rifle")):
-            weapon_str = "a FIREARM / GUN (lethal weapon)"
-        else:
-            weapon_str = "a dangerous weapon"
-
-        return (
-            f"CRITICAL THREAT: {weapon_str.upper()} has been detected on surveillance.\n"
-            f"  Threat Details:   {alert.message}\n"
-            f"  Action Required:  Assess situation immediately and dispatch security personnel."
-        )
+        return f"CRITICAL THREAT: {alert.message}. Security personnel must be alerted immediately."
     elif atype == "loitering":
-        return (
-            f"A person has been standing in the area for {dur} seconds."
-        )
-    else:
-        return alert.message
+        return f"Person (ID:{alert.object_id or 'Unknown'}) has been observed pacing/lingering for {dur}s. Behavior matches suspicious loitering criteria."
+    return alert.message
 
 
-def _format_email_body(alert: Alert) -> str:
-    """Build a clear, human-readable email body that anyone can understand."""
+def _format_email_plain(alert: Alert) -> str:
+    """Build a plain-text email body with prominent BOLD headers."""
     title = _friendly_alert_title(alert)
-    urgency = _friendly_severity(alert)
+    severity_upper = alert.severity.value.upper()
+    reason = _extract_reason(alert)
     description = _friendly_description(alert)
     time_str = alert.timestamp.strftime("%B %d, %Y at %I:%M:%S %p (UTC)")
 
-    lines = [
-        f"[SECURITY ALERT] {title}",
-        f"{'=' * 50}",
-        "",
-        f"Urgency:      {urgency}",
-        f"Detected at:  {time_str}",
-    ]
+    return f"""============================================================
+**CRITICAL LEVEL: {severity_upper}**
+============================================================
+**REASON FOR ALERT: {reason}**
+------------------------------------------------------------
+INCIDENT TITLE:   {title}
+TARGET OBJECT ID: {alert.object_id or 'N/A'}
+CONFIDENCE:       {alert.confidence:.0%}
+DURATION:         {alert.duration_seconds:.1f} seconds
+TIMESTAMP:        {time_str}
 
-    if alert.alert_type.value == "weapon_detected":
-        msg_lower = alert.message.lower()
-        w_name = "KNIFE (Edged Weapon)" if "knife" in msg_lower else ("FIREARM / HANDGUN" if any(w in msg_lower for w in ("gun", "firearm", "pistol", "rifle")) else "DANGEROUS WEAPON")
-        lines.append(f"Threat Type:  {w_name}")
-    elif alert.alert_type.value == "intrusion" and alert.zone_name:
-        lines.append(f"Zone Name:    {alert.zone_name}")
-    elif alert.alert_type.value == "unattended_object" and "Owner:" in alert.message:
-        owner_part = alert.message.split("Owner:")[1].split(")")[0].strip()
-        lines.append(f"Owner Info:   {owner_part}")
+INCIDENT DETAILS:
+  {description}
 
-    lines.extend([
-        f"Confidence:   {alert.confidence:.0%}",
-        "",
-        f"What happened:",
-        f"  {description}",
-        "",
-    ])
+RECOMMENDED ACTION:
+  - Verify live camera feed terminal immediately.
+  - Dispatch on-site security response.
+============================================================
+Automated alert from AI Video Surveillance System.
+"""
 
-    if alert.snapshot_url:
-        lines.append("[SNAPSHOT] A photo snapshot of the incident is attached to this email.")
 
-    lines.extend([
-        "",
-        "-" * 50,
-        "What should you do?",
-        "  - Review the camera feed for the area in question.",
-        "  - If the situation looks concerning, notify on-site security.",
-        "  - For weapon alerts, contact emergency services immediately.",
-        "",
-        "This is an automated alert from the AI Video Surveillance System.",
-        "If you believe this is a false alarm, no action is needed.",
-    ])
+def _format_email_html(alert: Alert) -> str:
+    """Build a styled HTML email with bold colored severity headers."""
+    title = _friendly_alert_title(alert)
+    severity_upper = alert.severity.value.upper()
+    reason = _extract_reason(alert)
+    description = _friendly_description(alert)
+    time_str = alert.timestamp.strftime("%B %d, %Y at %I:%M:%S %p (UTC)")
 
-    return "\n".join(lines)
+    sev_color = "#ef4444" if severity_upper == "CRITICAL" else ("#f59e0b" if severity_upper == "HIGH" else "#3b82f6")
+
+    return f"""<!DOCTYPE html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0b0f19; color: #f8fafc; padding: 24px; margin: 0;">
+  <div style="max-width: 600px; margin: 0 auto; background-color: #111827; border: 1px solid #1f2937; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+    <div style="background-color: {sev_color}; padding: 14px 20px;">
+      <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800; letter-spacing: 0.05em;">
+        <b>CRITICAL LEVEL: {severity_upper}</b>
+      </h1>
+    </div>
+
+    <div style="padding: 20px;">
+      <div style="background: rgba(255,255,255,0.04); border-left: 4px solid {sev_color}; padding: 12px 16px; border-radius: 6px; margin-bottom: 18px;">
+        <div style="font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 700; margin-bottom: 4px;">REASON FOR ALERT</div>
+        <div style="font-size: 15px; color: #ffffff; font-weight: 700; line-height: 1.4;">
+          <b>{reason}</b>
+        </div>
+      </div>
+
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 18px; font-size: 13px;">
+        <tr style="border-bottom: 1px solid #1f2937;">
+          <td style="padding: 8px 0; color: #94a3b8;"><b>Incident Type:</b></td>
+          <td style="padding: 8px 0; color: #ffffff; font-weight: 600;">{title}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #1f2937;">
+          <td style="padding: 8px 0; color: #94a3b8;"><b>Target ID:</b></td>
+          <td style="padding: 8px 0; color: #ffffff; font-weight: 600;">{alert.object_id or 'N/A'}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #1f2937;">
+          <td style="padding: 8px 0; color: #94a3b8;"><b>Confidence:</b></td>
+          <td style="padding: 8px 0; color: #ffffff; font-weight: 600;">{alert.confidence:.0%}</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #1f2937;">
+          <td style="padding: 8px 0; color: #94a3b8;"><b>Timestamp:</b></td>
+          <td style="padding: 8px 0; color: #ffffff;">{time_str}</td>
+        </tr>
+      </table>
+
+      <div style="margin-bottom: 20px;">
+        <div style="font-size: 11px; text-transform: uppercase; color: #94a3b8; font-weight: 700; margin-bottom: 6px;">DETAILS</div>
+        <div style="font-size: 13px; color: #cbd5e1; line-height: 1.5; background: #080c14; padding: 12px; border-radius: 6px;">
+          {description}
+        </div>
+      </div>
+
+      <div style="font-size: 11px; color: #64748b; border-top: 1px solid #1f2937; padding-top: 12px;">
+        This automated security dispatch was generated by the AI Video Surveillance System.
+      </div>
+    </div>
+  </div>
+</body>
+</html>"""
 
 
 def _send_email(alert: Alert, snapshot_path: Optional[str] = None) -> None:
-    """Send an alert email via SMTP with optional snapshot attachment."""
+    """Send an alert email via SMTP with HTML/plain bodies and optional snapshot."""
     settings = get_settings()
 
     recipients = [
@@ -290,18 +348,19 @@ def _send_email(alert: Alert, snapshot_path: Optional[str] = None) -> None:
         return
 
     subject = (
-        f"Security Alert: {_friendly_alert_title(alert)} "
-        f"[{alert.severity.value.capitalize()} Priority]"
+        f"[{alert.severity.value.upper()}] Security Alert: {_friendly_alert_title(alert)}"
     )
 
-    msg = MIMEMultipart()
+    msg = MIMEMultipart("alternative")
     msg["From"] = settings.smtp_user
     msg["To"] = ", ".join(recipients)
     msg["Subject"] = subject
 
-    # Body
-    body = _format_email_body(alert)
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+    # Attach Plain and HTML parts
+    part_plain = MIMEText(_format_email_plain(alert), "plain", "utf-8")
+    part_html = MIMEText(_format_email_html(alert), "html", "utf-8")
+    msg.attach(part_plain)
+    msg.attach(part_html)
 
     # Snapshot attachment (if exists)
     if snapshot_path:
@@ -345,32 +404,16 @@ def _send_email(alert: Alert, snapshot_path: Optional[str] = None) -> None:
 # ---------------------------------------------------------------------------
 
 def _format_sms_body(alert: Alert) -> str:
-    """Build a compact but human-readable SMS body."""
-    title = _friendly_alert_title(alert)
-    dur = int(alert.duration_seconds)
+    """Build a compact SMS body with CRITICAL LEVEL and REASON clearly stated."""
     severity = alert.severity.value.upper()
+    reason = _extract_reason(alert)
     time_str = alert.timestamp.strftime("%I:%M:%S %p")
 
-    atype = alert.alert_type.value
-    if atype == "intrusion":
-        zone = alert.zone_name or "Restricted Zone"
-        detail = f"Intruder in '{zone}' ({dur}s)."
-    elif atype == "unattended_object":
-        owner = ""
-        if "Owner:" in alert.message:
-            owner = f" [{alert.message.split('Owner:')[1].split(')')[0].strip()}]"
-        detail = f"Unattended item{owner} ({dur}s)."
-    elif atype == "weapon_detected":
-        msg_lower = alert.message.lower()
-        w_tag = "KNIFE" if "knife" in msg_lower else ("GUN/FIREARM" if any(w in msg_lower for w in ("gun", "firearm", "pistol", "rifle")) else "WEAPON")
-        detail = f"[CRITICAL THREAT] {w_tag} DETECTED! Urgent response required."
-    else:
-        detail = alert.message[:60]
-
     return (
-        f"[ALERT] {title}\n"
-        f"{detail}\n"
-        f"Priority: {severity} | {time_str}"
+        f"[CRITICAL LEVEL: {severity}]\n"
+        f"REASON: {reason}\n"
+        f"TARGET ID: {alert.object_id or 'N/A'} | TIME: {time_str}\n"
+        f"Surveillance AI Alert"
     )
 
 

@@ -547,6 +547,46 @@
       cursor: pointer;
     }
 
+    /* Filter Tabs */
+    .filter-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 8px 14px;
+      background: rgba(0, 0, 0, 0.25);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .filter-tab {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s;
+    }
+    .filter-tab:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+    .filter-tab.active {
+      background: #ef4444;
+      border-color: #ef4444;
+      color: #fff;
+    }
+    .filter-tab .badge {
+      background: rgba(0, 0, 0, 0.35);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 9px;
+    }
+
     .empty-state {
       padding: 30px 20px;
       text-align: center;
@@ -757,6 +797,14 @@
           <button class="btn btn-nav" style="padding: 4px 10px; font-size: 11px;" onclick="clearAlerts()">Clear</button>
         </div>
 
+        <div class="filter-tabs">
+          <button class="filter-tab active" id="tabAll" onclick="setAlertFilter('all')">All <span class="badge" id="countFilterAll">0</span></button>
+          <button class="filter-tab" id="tabIntrusion" onclick="setAlertFilter('intrusion')">Breach <span class="badge" id="countFilterIntrusion">0</span></button>
+          <button class="filter-tab" id="tabWeapon" onclick="setAlertFilter('weapon_detected')">Weapons <span class="badge" id="countFilterWeapons">0</span></button>
+          <button class="filter-tab" id="tabUnattended" onclick="setAlertFilter('unattended_object')">Unattended <span class="badge" id="countFilterUnattended">0</span></button>
+          <button class="filter-tab" id="tabLoitering" onclick="setAlertFilter('loitering')">Loitering <span class="badge" id="countFilterLoitering">0</span></button>
+        </div>
+
         <div class="incidents-list" id="incidentsList">
           <div class="empty-state">No perimeter breaches detected. Area is secure.</div>
         </div>
@@ -958,55 +1006,139 @@
       } catch (err) {}
     }
 
-    // Poll Alerts (Dashboard 2: shows Intrusion + Weapons + Unattended Objects)
+    let currentAlertFilter = 'all';
+    let cachedAlerts = [];
+
+    function setAlertFilter(filter) {
+      currentAlertFilter = filter;
+      document.querySelectorAll('.filter-tab').forEach(tab => tab.classList.remove('active'));
+      const activeId = filter === 'all' ? 'tabAll' :
+                       filter === 'intrusion' ? 'tabIntrusion' :
+                       filter === 'weapon_detected' ? 'tabWeapon' :
+                       filter === 'unattended_object' ? 'tabUnattended' : 'tabLoitering';
+      const activeTab = document.getElementById(activeId);
+      if (activeTab) activeTab.classList.add('active');
+      renderAlertsList();
+    }
+
+    function getAlertReason(alert) {
+      const type = (alert.alert_type || '').toLowerCase();
+      const dur = Math.round(alert.duration_seconds || 0);
+      if (type === 'weapon_detected') {
+        const msg = (alert.message || '').toLowerCase();
+        if (msg.includes('knife')) return 'Edged weapon (Knife) identified in perimeter FOV.';
+        if (msg.includes('gun') || msg.includes('firearm') || msg.includes('pistol')) return 'Lethal firearm (Gun) identified in perimeter FOV.';
+        return 'Dangerous weapon identified in camera view.';
+      }
+      if (type === 'intrusion') {
+        const zone = alert.zone_name || 'Restricted Corridor';
+        return `Unauthorized person breached ${zone} and persisted for ${dur}s.`;
+      }
+      if (type === 'unattended_object') {
+        let owner = '';
+        if (alert.message && alert.message.includes('Owner:')) {
+          owner = ' (Owner: ' + alert.message.split('Owner:')[1].split(')')[0].trim() + ')';
+        }
+        return `Unattended luggage/bag left without nearby owner for ${dur}s${owner}.`;
+      }
+      if (type === 'loitering') {
+        if (alert.message && alert.message.includes('[') && alert.message.includes(']')) {
+          return 'Restless pacing: ' + alert.message.split('[')[1].split(']')[0];
+        }
+        return `Person lingering in perimeter zone for ${dur}s exceeding threshold.`;
+      }
+      return alert.message;
+    }
+
+    function renderAlertsList() {
+      const alerts = cachedAlerts;
+      document.getElementById('totalBreachesVal').innerText = alerts.length;
+
+      const intrusionAlerts = alerts.filter(a => a.alert_type === 'intrusion' || a.zone_name);
+      const weaponAlerts = alerts.filter(a => a.alert_type === 'weapon_detected');
+      const unattendedAlerts = alerts.filter(a => a.alert_type === 'unattended_object');
+      const loiteringAlerts = alerts.filter(a => a.alert_type === 'loitering');
+
+      const cAll = document.getElementById('countFilterAll');
+      const cIntrusion = document.getElementById('countFilterIntrusion');
+      const cWeapon = document.getElementById('countFilterWeapons');
+      const cUnattended = document.getElementById('countFilterUnattended');
+      const cLoitering = document.getElementById('countFilterLoitering');
+      if (cAll) cAll.innerText = alerts.length;
+      if (cIntrusion) cIntrusion.innerText = intrusionAlerts.length;
+      if (cWeapon) cWeapon.innerText = weaponAlerts.length;
+      if (cUnattended) cUnattended.innerText = unattendedAlerts.length;
+      if (cLoitering) cLoitering.innerText = loiteringAlerts.length;
+
+      const list = document.getElementById('incidentsList');
+      if (!list) return;
+
+      let filtered = alerts;
+      if (currentAlertFilter === 'intrusion') filtered = intrusionAlerts;
+      else if (currentAlertFilter === 'weapon_detected') filtered = weaponAlerts;
+      else if (currentAlertFilter === 'unattended_object') filtered = unattendedAlerts;
+      else if (currentAlertFilter === 'loitering') filtered = loiteringAlerts;
+
+      if (filtered.length === 0) {
+        list.innerHTML = `<div class="empty-state">No incidents in this category. Area is secure.</div>`;
+        return;
+      }
+
+      list.innerHTML = filtered.map(alert => {
+        const snapUrl = alert.snapshot_url ? (alert.snapshot_url.startsWith('http') ? alert.snapshot_url : `${API_BASE}${alert.snapshot_url}`) : (alert.snapshot_path ? `${API_BASE}/api/snapshots/${alert.snapshot_path}` : null);
+        const snapHtml = snapUrl ? `
+          <img class="incident-snapshot" src="${snapUrl}" onclick="openModal('${snapUrl}', '${alert.message}')" alt="Incident Snapshot">
+        ` : '';
+
+        const sevUpper = (alert.severity || 'CRITICAL').toUpperCase();
+        let badgeColor = "#f87171";
+        let badgeText = "RESTRICTED AREA BREACH";
+        let borderLeftColor = "var(--danger)";
+
+        if (alert.alert_type === 'weapon_detected') {
+          badgeColor = "#ef4444";
+          badgeText = "CRITICAL WEAPON DETECTED";
+          borderLeftColor = "#dc2626";
+        } else if (alert.alert_type === 'unattended_object') {
+          badgeColor = "#f59e0b";
+          badgeText = "UNATTENDED OBJECT";
+          borderLeftColor = "#f59e0b";
+        } else if (alert.alert_type === 'loitering') {
+          badgeColor = "#38bdf8";
+          badgeText = "SUSPICIOUS LOITERING";
+          borderLeftColor = "#38bdf8";
+        } else if (alert.zone_name) {
+          badgeText = `${alert.zone_name.toUpperCase()} INTRUSION`;
+        }
+
+        return `
+          <div class="incident-item" style="border-left-color: ${borderLeftColor};">
+            <div class="incident-item-header">
+              <span style="font-size: 11px; font-weight: 700; color: ${badgeColor};">${badgeText}</span>
+              <span style="font-size: 10px; font-weight: 800; font-family: var(--font-mono); color: #ef4444;"><b>CRITICAL LEVEL: ${sevUpper}</b></span>
+            </div>
+            <div style="margin: 4px 0; font-size: 11px; line-height: 1.4; color: #fbbf24;">
+              <b>REASON:</b> <span style="color: #f1f5f9; font-weight: 500;">${getAlertReason(alert)}</span>
+            </div>
+            <div class="incident-msg">${alert.message}</div>
+            <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); margin-bottom: 6px;">
+              <span>⏱️ ${Math.round(alert.duration_seconds || 0)}s duration</span>
+              <span class="incident-time">${new Date(alert.timestamp).toLocaleTimeString()}</span>
+            </div>
+            ${snapHtml}
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Poll Alerts (Dashboard 2: shows Intrusion + Weapons + Unattended Objects + Loitering)
     async function fetchAlerts() {
       try {
         const res = await fetch(`${API_BASE}/api/alerts?camera=restricted&limit=50`);
         if (!res.ok) return;
         const data = await res.json();
-        const alerts = data.alerts || [];
-
-        document.getElementById('totalBreachesVal').innerText = alerts.length;
-
-        const list = document.getElementById('incidentsList');
-        if (alerts.length === 0) {
-          list.innerHTML = `<div class="empty-state">No security incidents detected. Area is secure.</div>`;
-          return;
-        }
-
-        list.innerHTML = alerts.map(alert => {
-          const snapUrl = alert.snapshot_url ? (alert.snapshot_url.startsWith('http') ? alert.snapshot_url : `${API_BASE}${alert.snapshot_url}`) : (alert.snapshot_path ? `${API_BASE}/api/snapshots/${alert.snapshot_path}` : null);
-          const snapHtml = snapUrl ? `
-            <img class="incident-snapshot" src="${snapUrl}" onclick="openModal('${snapUrl}', '${alert.message}')" alt="Incident Snapshot">
-          ` : '';
-
-          let badgeColor = "#f87171";
-          let badgeText = "RESTRICTED AREA BREACH";
-          let borderLeftColor = "var(--danger)";
-
-          if (alert.alert_type === 'weapon_detected') {
-            badgeColor = "#ef4444";
-            badgeText = "CRITICAL WEAPON DETECTED";
-            borderLeftColor = "#dc2626";
-          } else if (alert.alert_type === 'unattended_object') {
-            badgeColor = "#f59e0b";
-            badgeText = "UNATTENDED OBJECT";
-            borderLeftColor = "#f59e0b";
-          } else if (alert.zone_name) {
-            badgeText = `${alert.zone_name.toUpperCase()} INTRUSION`;
-          }
-
-          return `
-            <div class="incident-item" style="border-left-color: ${borderLeftColor};">
-              <div class="incident-item-header">
-                <span style="font-size: 11px; font-weight: 700; color: ${badgeColor};">${badgeText}</span>
-                <span class="incident-time">${new Date(alert.timestamp).toLocaleTimeString()}</span>
-              </div>
-              <div class="incident-msg">${alert.message}</div>
-              ${snapHtml}
-            </div>
-          `;
-        }).join('');
+        cachedAlerts = data.alerts || [];
+        renderAlertsList();
       } catch (err) {}
     }
 

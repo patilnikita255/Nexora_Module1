@@ -54,10 +54,14 @@ class VideoProcessor:
         self._init_error: Optional[str] = None
         self._lock = threading.Lock()
 
+        # Standby graphic to prevent white screen or streaming timeout
+        self._standby_jpeg: bytes = self._create_standby_jpeg("SURVEILLANCE STANDBY")
+        self._current_video_path: Optional[str] = None
+
         # Latest frame data (thread-safe via _lock)
         self._latest_frame: Optional[np.ndarray] = None
-        self._latest_jpeg: Optional[bytes] = None
-        self._latest_jpeg_restricted: Optional[bytes] = None
+        self._latest_jpeg: bytes = self._standby_jpeg
+        self._latest_jpeg_restricted: bytes = self._standby_jpeg
         self._latest_detections: List[Detection] = []
         self._latest_tracked: List[TrackedObject] = []
         self._fps: float = 0.0
@@ -75,6 +79,27 @@ class VideoProcessor:
 
         # Frame normalization target for more stable inference quality.
         self._target_frame_width = 768
+
+    @staticmethod
+    def _create_standby_jpeg(status_text: str = "SURVEILLANCE STANDBY") -> bytes:
+        """Render a dark tactical surveillance standby HUD frame."""
+        img = np.zeros((480, 768, 3), dtype=np.uint8)
+        img[:] = (12, 16, 24)
+        for x in range(0, 768, 64):
+            cv2.line(img, (x, 0), (x, 480), (22, 28, 42), 1)
+        for y in range(0, 480, 48):
+            cv2.line(img, (0, y), (768, y), (22, 28, 42), 1)
+        for cx, cy in [(20, 20), (748, 20), (20, 460), (748, 460)]:
+            cv2.circle(img, (cx, cy), 3, (59, 130, 246), -1)
+        cv2.circle(img, (384, 240), 50, (59, 130, 246), 1)
+        cv2.circle(img, (384, 240), 8, (59, 130, 246), -1)
+        cv2.line(img, (384, 170), (384, 310), (59, 130, 246), 1)
+        cv2.line(img, (314, 240), (454, 240), (59, 130, 246), 1)
+        cv2.putText(img, "AI VIDEO SURVEILLANCE FEED", (230, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (240, 245, 255), 2)
+        cv2.putText(img, f"// {status_text} //", (260, 275), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (16, 185, 129), 2)
+        cv2.putText(img, "SECURE MONITORING TERMINAL", (260, 310), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (148, 163, 184), 1)
+        _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return buf.tobytes()
 
     def _init_pipeline(self) -> bool:
         """
@@ -124,11 +149,13 @@ class VideoProcessor:
             cam_id = 0 if str_source in ("webcam", "live", "camera") else int(video_path)
             print(f"[Processor] Opening live camera index {cam_id}...")
             cap = cv2.VideoCapture(cam_id)
+            self._current_video_path = None
         else:
             if not os.path.isfile(video_path):
                 print(f"[Processor] Video file not found: {video_path}")
                 return False
             cap = cv2.VideoCapture(video_path)
+            self._current_video_path = str(video_path)
 
         if not cap.isOpened():
             print(f"[Processor] Failed to open: {video_path}")
@@ -142,6 +169,11 @@ class VideoProcessor:
         self._video_source = "Live Camera" if is_webcam else os.path.basename(str(video_path))
         self._running = True
         self._init_error = None
+
+        init_jpeg = self._create_standby_jpeg("INITIALIZING AI PIPELINE...")
+        with self._lock:
+            self._latest_jpeg = init_jpeg
+            self._latest_jpeg_restricted = init_jpeg
 
         # Start processing thread (pipeline init happens inside the thread)
         self._thread = threading.Thread(target=self._process_loop, daemon=True)
@@ -157,6 +189,9 @@ class VideoProcessor:
         if self._cap:
             self._cap.release()
             self._cap = None
+        with self._lock:
+            self._latest_jpeg = self._standby_jpeg
+            self._latest_jpeg_restricted = self._standby_jpeg
         print("[Processor] Stopped.")
 
     def _process_loop(self) -> None:
@@ -186,27 +221,52 @@ class VideoProcessor:
                     if self._is_webcam:
                         time.sleep(0.05)
                         continue
-                    # Video file reached the end — loop back so the surveillance feed keeps playing seamlessly
+                    # Video file reached the end — loop back seamlessly
                     print("[Processor] End of video reached. Looping back to beginning.")
                     self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    time.sleep(0.04)
-                    continue
+                    ret, frame = self._cap.read()
+                    if not ret and self._current_video_path and os.path.isfile(self._current_video_path):
+                        # Seek failed (common on Windows MSMF backend) — re-open capture directly
+                        self._cap.release()
+                        self._cap = cv2.VideoCapture(self._current_video_path)
+                        ret, frame = self._cap.read()
+                    if not ret:
+                        time.sleep(0.04)
+                        continue
 
                 raw_count += 1
                 self._frame_count += 1
                 frame = self._preprocess_frame(frame)
 
-                # Process every Nth frame for performance
+                # Process every Nth frame for performance while keeping overlays smooth
                 if raw_count % process_every_n != 0:
-                    _, jpeg = cv2.imencode(
-                        ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70]
-                    )
-                    jpeg_bytes = jpeg.tobytes()
                     with self._lock:
-                        self._latest_frame = frame
-                        self._latest_jpeg = jpeg_bytes
-                        if self._latest_jpeg_restricted is None:
-                            self._latest_jpeg_restricted = jpeg_bytes
+                        curr_tracked = list(self._latest_tracked)
+                        curr_dets = list(self._latest_detections)
+                    annotated_m = draw_frame_overlay(
+                        frame.copy(),
+                        curr_dets,
+                        curr_tracked,
+                        self._settings.intrusion_zone_coords,
+                        self._fps,
+                        zones=None,
+                        show_zones=False,
+                    )
+                    annotated_r = draw_frame_overlay(
+                        frame.copy(),
+                        curr_dets,
+                        curr_tracked,
+                        self._settings.intrusion_zone_coords,
+                        self._fps,
+                        zones=self._analyzer.get_zones(),
+                        show_zones=True,
+                    )
+                    _, j_m = cv2.imencode(".jpg", annotated_m, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    _, j_r = cv2.imencode(".jpg", annotated_r, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    with self._lock:
+                        self._latest_frame = annotated_r
+                        self._latest_jpeg = j_m.tobytes()
+                        self._latest_jpeg_restricted = j_r.tobytes()
                     if not self._is_webcam:
                         time.sleep(0.02)
                     continue
@@ -366,10 +426,10 @@ class VideoProcessor:
         active_mode = mode or self._camera_mode
         uptime = time.time() - self._start_time if self._running else 0.0
 
-        # Dashboard 1 (General Area): strictly weapons and unattended objects
+        # Dashboard 1 (General Area): weapons, unattended objects, and loitering
         if active_mode in ("main", "general", "open_area"):
             gen_count = self.alert_manager.get_alert_count(
-                {AlertType.WEAPON_DETECTED, AlertType.UNATTENDED_OBJECT}
+                {AlertType.WEAPON_DETECTED, AlertType.UNATTENDED_OBJECT, AlertType.LOITERING}
             )
             return SystemStatus(
                 is_running=self._running,
@@ -469,25 +529,25 @@ class VideoProcessor:
         return self._init_error
 
     def generate_mjpeg(self, mode: str = "main"):
-        """Generator that yields MJPEG frames for streaming."""
-        # Wait up to 10 seconds for the first frame to be ready
-        for _ in range(100):
+        """
+        Generator that yields MJPEG frames continuously for streaming without failing.
+        Yields standby feed when idle, transitioning smoothly to live feed when processing.
+        """
+        while True:
             if not self._running:
-                break
-            with self._lock:
-                target = self._latest_jpeg_restricted if mode == "restricted" else self._latest_jpeg
-                if target is not None:
-                    break
-            time.sleep(0.08)
-
-        while self._running:
-            with self._lock:
-                jpeg = self._latest_jpeg_restricted if mode == "restricted" else self._latest_jpeg
-            if jpeg:
                 yield (
                     b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + self._standby_jpeg + b"\r\n"
                 )
-                time.sleep(0.033)  # ~30fps
-            else:
-                time.sleep(0.05)
+                time.sleep(0.3)
+                continue
+
+            with self._lock:
+                jpeg = self._latest_jpeg_restricted if mode == "restricted" else self._latest_jpeg
+
+            frame_bytes = jpeg if jpeg is not None else self._standby_jpeg
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+            )
+            time.sleep(0.033)  # ~30fps smooth streaming

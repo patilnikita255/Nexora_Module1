@@ -35,18 +35,14 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # Behavior thresholds
-    loitering_threshold_seconds: int = 30
+    loitering_threshold_seconds: int = 15
+    loitering_suspicion_threshold: float = 0.65
     intrusion_zone: str = "0.8,0.0,1.0,1.0"
     unattended_object_seconds: int = 15
-    alert_cooldown_seconds: int = 30
+    alert_cooldown_seconds: int = 60
     enable_firearm_model: bool = True
-    # Gun (fine-tuned model) confidence threshold.
-    # Must be ~0.35 so the sparse inference frames (every 8th raw frame) catch
-    # the real handgun clip, whose conf oscillates ~0.35-0.64. Confirmed by
-    # simulating the app's exact inference cadence (0.35 => solid alert, 0.40 => miss).
-    gun_confidence: float = 0.35
-    # Frames a weapon must persist before an alert is confirmed (reduces flicker/FPs)
-    weapon_confirm_frames: int = 6
+    gun_confidence: float = 0.28
+    weapon_confirm_frames: int = 2
 
     # CORS
     frontend_url: str = "http://localhost:8080"

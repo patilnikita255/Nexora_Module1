@@ -38,26 +38,15 @@ SURVEILLANCE_CLASSES = {
 }
 
 # Minimum allowed dimension for a gun detection box (filters tiny artifacts)
-GUN_MIN_DIMENSION = 28
+GUN_MIN_DIMENSION = 14
 
 # Absurd boxes (whole frame / wall-sized) are always gun-model artifacts.
-GUN_ABSURD_HEIGHT_RATIO = 0.75
-GUN_ABSURD_WIDTH_RATIO = 0.75
-GUN_ABSURD_AREA_RATIO = 0.70
+GUN_ABSURD_HEIGHT_RATIO = 0.85
+GUN_ABSURD_WIDTH_RATIO = 0.85
+GUN_ABSURD_AREA_RATIO = 0.75
 
-# A person-sized gun box is only believable when it overlaps a person.
-# The fine-tuned gun model frequently fires on knife-wielding frames with a
-# large region that contains no person (and no base-model knife); genuinely
-# held weapons produce a box wrapped around the detected person instead
-# (observed person-IoU ~0.9 on the real handgun clip).
-GUN_LARGE_HEIGHT_RATIO = 0.28
-GUN_LARGE_WIDTH_RATIO = 0.28
-GUN_SUPPORT_PERSON_IOU = 0.30
-
-# Minimum overlap between a gun-model box and a base-model knife box to
-# reclassify the detection as "knife". Kept low because the gun boxes tend to
-# be larger than the tight knife boxes (raw IoU underestimates the match).
-WEAKNESS_KNIFE_IOU = 0.15
+# Minimum overlap between weapon boxes to trigger reconciliation
+WEAPON_OVERLAP_IOU = 0.20
 
 
 class ObjectDetector:
@@ -80,9 +69,9 @@ class ObjectDetector:
         self.confidence_threshold = settings.yolo_confidence
         self.gun_confidence = settings.gun_confidence
 
-        # 2. Fine-tuned lightweight gun model
+        # 2. Fine-tuned lightweight gun model (runs on each processed frame)
         self.gun_model = None
-        self.gun_interval = 4  # Run gun inference every 4th frame on CPU
+        self.gun_interval = 1
         self._frame_index = 0
         self._cached_gun_detections: List[Detection] = []
 
@@ -148,8 +137,8 @@ class ObjectDetector:
                     continue
 
                 conf = float(box.conf[0])
-                # Knife confidence threshold >= 0.35
-                if cls_id == 43 and conf < 0.35:
+                # Knife confidence threshold >= 0.28
+                if cls_id == 43 and conf < 0.28:
                     continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
@@ -166,56 +155,51 @@ class ObjectDetector:
                     )
                 )
 
-        # 2. Fine-tuned Gun Model Detection (Run every Nth frame on CPU)
+        # 2. Fine-tuned Gun Model Detection (Run on each processed frame)
         if self.gun_model is not None:
-            if self._frame_index % self.gun_interval == 0:
-                persons = [d for d in detections if d.class_name == "person"]
-                gun_results = self.gun_model(
-                    frame,
-                    conf=self.gun_confidence,
-                    imgsz=640,
-                    device=self.device,
-                    verbose=False,
-                )
-                current_guns: List[Detection] = []
-                for g_res in gun_results:
-                    if g_res.boxes is None:
+            persons = [d for d in detections if d.class_name == "person"]
+            gun_results = self.gun_model(
+                frame,
+                conf=self.gun_confidence,
+                imgsz=640,
+                device=self.device,
+                verbose=False,
+            )
+            current_guns: List[Detection] = []
+            for g_res in gun_results:
+                if g_res.boxes is None:
+                    continue
+                for box in g_res.boxes:
+                    conf = float(box.conf[0])
+                    if conf < self.gun_confidence:
                         continue
-                    for box in g_res.boxes:
-                        conf = float(box.conf[0])
-                        if conf < self.gun_confidence:
-                            continue
-                        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                        bw = x2 - x1
-                        bh = y2 - y1
-                        # Ignore tiny artifacts
-                        if bw < GUN_MIN_DIMENSION or bh < GUN_MIN_DIMENSION:
-                            continue
-                        frame_h, frame_w = frame.shape[:2]
-                        if not self._gun_box_is_plausible(
-                            x1, y1, x2, y2, frame_w, frame_h, persons
-                        ):
-                            continue
-                        cx = (x1 + x2) // 2
-                        cy = (y1 + y2) // 2
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    bw = x2 - x1
+                    bh = y2 - y1
+                    # Ignore tiny artifacts
+                    if bw < GUN_MIN_DIMENSION or bh < GUN_MIN_DIMENSION:
+                        continue
+                    frame_h, frame_w = frame.shape[:2]
+                    if not self._gun_box_is_plausible(
+                        x1, y1, x2, y2, frame_w, frame_h, persons
+                    ):
+                        continue
+                    cx = (x1 + x2) // 2
+                    cy = (y1 + y2) // 2
 
-                        current_guns.append(
-                            Detection(
-                                class_name="gun",
-                                confidence=round(conf, 3),
-                                bbox=BBox(x1=x1, y1=y1, x2=x2, y2=y2),
-                                center_x=cx,
-                                center_y=cy,
-                            )
+                    current_guns.append(
+                        Detection(
+                            class_name="gun",
+                            confidence=round(conf, 3),
+                            bbox=BBox(x1=x1, y1=y1, x2=x2, y2=y2),
+                            center_x=cx,
+                            center_y=cy,
                         )
-                self._cached_gun_detections = current_guns
-
-            # Add cached gun detections to current frame detections
+                    )
+            self._cached_gun_detections = current_guns
             detections.extend(self._cached_gun_detections)
 
-        # 3. Reconcile gun-model output against base-model knives.
-        # If the fine-tuned model flags something as "gun" that the base COCO
-        # model reliably identifies as "knife", trust the base model.
+        # 3. Reconcile weapon classes (Gun vs Knife) to prevent mislabeling
         detections = self._reconcile_weapon_classes(detections)
 
         return detections
@@ -231,13 +215,7 @@ class ObjectDetector:
         persons: List[Detection],
     ) -> bool:
         """
-        Heuristics that discard gun-model false positives:
-
-        1. Absurd (whole-frame / wall-sized) boxes are always artifacts.
-        2. A person-sized box must overlap a base-model person. The real
-           handgun clip yields a gun box that essentially wraps the detected
-           person (person-IoU ~0.9), whereas knife scenes frequently produce a
-           large gun box over a region with no person at all.
+        Discard absurd gun-model artifacts while keeping genuine handguns and long guns.
         """
         if frame_w <= 0 or frame_h <= 0:
             return True
@@ -251,14 +229,24 @@ class ObjectDetector:
         if (bw * bh) / (frame_w * frame_h) > GUN_ABSURD_AREA_RATIO:
             return False
 
-        if (bh / frame_h > GUN_LARGE_HEIGHT_RATIO) or (
-            bw / frame_w > GUN_LARGE_WIDTH_RATIO
-        ):
-            gun_bbox = BBox(x1=x1, y1=y1, x2=x2, y2=y2)
-            best_support = 0.0
+        # If a weapon box is unusually large (> 35% of frame dimensions),
+        # verify it overlaps or is near a person to avoid whole-background false positives.
+        if (bh / frame_h > 0.35) or (bw / frame_w > 0.35):
+            gun_area = max(1, bw * bh)
+            has_person_support = False
             for p in persons:
-                best_support = max(best_support, self._iou(gun_bbox, p.bbox))
-            return best_support >= GUN_SUPPORT_PERSON_IOU
+                inter_w = max(0, min(x2, p.bbox.x2) - max(x1, p.bbox.x1))
+                inter_h = max(0, min(y2, p.bbox.y2) - max(y1, p.bbox.y1))
+                inter_area = inter_w * inter_h
+                overlap_ratio = inter_area / gun_area
+                dist = (
+                    ((x1 + x2) / 2 - p.center_x) ** 2
+                    + ((y1 + y2) / 2 - p.center_y) ** 2
+                ) ** 0.5
+                if overlap_ratio >= 0.10 or dist < 250:
+                    has_person_support = True
+                    break
+            return has_person_support
 
         return True
 
@@ -283,49 +271,53 @@ class ObjectDetector:
             return 0.0
         return inter / union
 
-    def _reconcile_weapon_classes(self, detections: List[Detection]) -> List[Detection]:
+    @staticmethod
+    def _reconcile_weapon_classes(detections: List[Detection]) -> List[Detection]:
         """
-        Reclassify gun-model boxes that overlap a base-model knife as 'knife'.
-
-        When the base COCO model already detected a knife in the same spot, the
-        gun-model box is almost certainly the same blade mislabeled as a gun.
-        In that case the gun detection is dropped (the base knife already
-        represents the object) and its (usually higher) confidence is merged
-        into the keeper so downstream alert confidence stays meaningful.
+        Accurately distinguish between Gun and Knife when both models trigger.
+        
+        COCO YOLO has a 'knife' class but lacks a 'gun' class, causing it to often
+        mislable firearms as knives. When a specialized firearm model and base knife
+        detector overlap:
+          1. If gun model confidence >= knife confidence - 0.10:
+             The object is correctly classified as a 'gun' (lethal firearm threat).
+          2. If knife confidence is substantially higher:
+             The object is classified as a 'knife' (edged weapon).
+          3. Confidences are boosted with supporting detection evidence.
         """
         guns = [d for d in detections if d.class_name == "gun"]
-        if not guns:
+        knives = [d for d in detections if d.class_name == "knife"]
+        others = [d for d in detections if d.class_name not in ("gun", "knife")]
+
+        if not guns or not knives:
             return detections
 
-        kept = [d for d in detections if d.class_name != "gun"]
+        suppressed_knives: set[int] = set()
+        suppressed_guns: set[int] = set()
+
         for g in guns:
-            best_iou = 0.0
-            best_knife: Optional[Detection] = None
-            for other in kept:
-                if other.class_name != "knife":
+            for k in knives:
+                if id(k) in suppressed_knives:
                     continue
-                score = self._weapon_match_score(g.bbox, other.bbox)
-                if score > best_iou:
-                    best_iou = score
-                    best_knife = other
-            if best_knife is not None and best_iou >= WEAKNESS_KNIFE_IOU:
-                best_knife.confidence = round(
-                    max(best_knife.confidence, g.confidence), 3
-                )
-            else:
-                kept.append(g)
-        return kept
+                match_score = ObjectDetector._weapon_match_score(g.bbox, k.bbox)
+                if match_score >= WEAPON_OVERLAP_IOU:
+                    if g.confidence >= (k.confidence - 0.10):
+                        # Specialized firearm model is confident or matches -> Gun
+                        suppressed_knives.add(id(k))
+                        g.confidence = round(max(g.confidence, k.confidence), 3)
+                    else:
+                        # Base model is significantly more confident in knife -> Knife
+                        suppressed_guns.add(id(g))
+                        k.confidence = round(max(k.confidence, g.confidence), 3)
+
+        kept_guns = [g for g in guns if id(g) not in suppressed_guns]
+        kept_knives = [k for k in knives if id(k) not in suppressed_knives]
+
+        return others + kept_guns + kept_knives
 
     @staticmethod
     def _weapon_match_score(gun_box: BBox, knife_box: BBox) -> float:
-        """
-        Match a gun-model box against a base-model knife box.
-
-        Returns a value >= WEAKNESS_KNIFE_IOU thresholds style matches. Raw IoU
-        underestimates the overlap when the gun box encloses the (smaller)
-        knife box, so a center-containment test is blended in: if either box's
-        center falls inside the other box, the match is treated as strong.
-        """
+        """Calculate overlap match between gun and knife bounding boxes."""
         iou = ObjectDetector._iou(gun_box, knife_box)
         gun_cx = (gun_box.x1 + gun_box.x2) / 2
         gun_cy = (gun_box.y1 + gun_box.y2) / 2
@@ -342,5 +334,8 @@ class ObjectDetector:
         )
 
         if gun_center_in_knife or knife_center_in_gun:
-            return max(iou, 0.5)
+            return max(iou, 0.40)
         return iou
+
+
+reconcile_weapon_classes = ObjectDetector._reconcile_weapon_classes

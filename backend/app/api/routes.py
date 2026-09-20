@@ -175,11 +175,8 @@ async def get_frame_metadata():
 async def video_feed(mode: str = "main"):
     """
     MJPEG video stream endpoint.
-    Use as <img src="/api/video_feed" /> or <img src="/api/video_feed?mode=restricted" />.
+    Serves live surveillance stream or standby feed seamlessly without HTTP 503 failures.
     """
-    if not processor.is_running:
-        raise HTTPException(status_code=503, detail="No video is being processed.")
-
     return StreamingResponse(
         processor.generate_mjpeg(mode=mode),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -219,19 +216,26 @@ async def get_alerts(
                 req_types.add(AlertType.UNATTENDED_OBJECT)
             elif t_norm in ("intrusion", "zone", "perimeter"):
                 req_types.add(AlertType.INTRUSION)
+            elif t_norm in ("loitering", "loiter", "pacing"):
+                req_types.add(AlertType.LOITERING)
         if req_types:
             target_types = req_types
 
     if target_types is None:
         if filter_mode in ("main", "general", "open_area"):
-            # Dashboard 1: strictly weapons and unattended objects
-            target_types = {AlertType.WEAPON_DETECTED, AlertType.UNATTENDED_OBJECT}
+            # Dashboard 1: weapons, unattended objects, and loitering
+            target_types = {
+                AlertType.WEAPON_DETECTED,
+                AlertType.UNATTENDED_OBJECT,
+                AlertType.LOITERING,
+            }
         elif filter_mode in ("restricted", "security"):
-            # Dashboard 2: complete picture (intrusion + weapon + unattended)
+            # Dashboard 2: complete picture (intrusion + weapon + unattended + loitering)
             target_types = {
                 AlertType.INTRUSION,
                 AlertType.WEAPON_DETECTED,
                 AlertType.UNATTENDED_OBJECT,
+                AlertType.LOITERING,
             }
 
     alerts = processor.alert_manager.get_alerts(limit=limit, alert_types=target_types)

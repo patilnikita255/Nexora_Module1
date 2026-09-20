@@ -72,21 +72,26 @@ class AlertManager:
 
             min_duration = self._duration_thresholds.get(event.event_type, 0.0)
             weapon_confirm_frames = self._settings.weapon_confirm_frames
-            required_frames = weapon_confirm_frames if event.event_type == AlertType.WEAPON_DETECTED else self._min_confirmed_frames
+            required_frames = (
+                weapon_confirm_frames
+                if event.event_type == AlertType.WEAPON_DETECTED
+                else (2 if event.event_type == AlertType.LOITERING else self._min_confirmed_frames)
+            )
             if confirmed_frames < required_frames:
                 continue
             if event.duration_seconds < min_duration:
                 continue
 
-            # Check: Only ONE alert per priority (severity) level for the same incident/person
-            already_sent = self._triggered_severities_by_key.setdefault(cooldown_key, set())
-            if severity_str in already_sent:
-                continue
-
-            # Check general cooldown
+            # Anti-duplication check:
             last_time = self._last_trigger_by_key.get(cooldown_key, 0)
+            already_sent = self._triggered_severities_by_key.setdefault(cooldown_key, set())
             if now - last_time < self._cooldown_seconds:
-                continue
+                # Within cooldown window: do not repeat same severity level
+                if severity_str in already_sent:
+                    continue
+            else:
+                # Cooldown window expired: reset severity set for fresh incident
+                already_sent.clear()
 
             # Save snapshot
             snapshot_url = None
