@@ -41,10 +41,20 @@ else:
     sys.path.insert(0, str(ROOT_DIR))
 
 def open_browser():
-    """Wait briefly for server to bind then open browser."""
-    time.sleep(1.8)
-    url = "http://localhost:8000"
-    print(f"\n[Launcher] Opening browser at: {url}\n")
+    """Wait until the server is actively listening on port 8000, then open browser."""
+    import socket
+    url = "http://127.0.0.1:8000"
+    # Wait up to 30 seconds for PyTorch and YOLO models to load and port to bind
+    for _ in range(60):
+        time.sleep(0.5)
+        try:
+            with socket.create_connection(("127.0.0.1", 8000), timeout=0.5):
+                break
+        except (OSError, ConnectionRefusedError):
+            continue
+
+    time.sleep(0.5)
+    print(f"\n[Launcher] System ready! Opening browser at: {url}\n")
     try:
         webbrowser.open(url)
     except Exception:
