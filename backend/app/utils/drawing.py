@@ -21,6 +21,8 @@ CLASS_COLORS = {
     "handbag": (255, 165, 0),      # Orange
     "suitcase": (255, 165, 0),     # Orange
     "knife": (0, 0, 255),          # Red
+    "gun": (0, 0, 255),            # Red
+    "weapon": (0, 0, 255),         # Red
     "cell phone": (255, 255, 0),   # Cyan
     "laptop": (255, 200, 0),       # Light blue
     "bottle": (200, 200, 0),       # Teal
@@ -37,6 +39,8 @@ def draw_frame_overlay(
     tracked_objects: List[TrackedObject],
     intrusion_zone: Tuple[float, float, float, float],
     fps: float,
+    zones: Optional[list] = None,
+    show_zones: bool = True,
 ) -> np.ndarray:
     """
     Draw all overlays on a frame.
@@ -47,14 +51,20 @@ def draw_frame_overlay(
         tracked_objects: Tracked objects with IDs and duration.
         intrusion_zone: Normalized zone coordinates (x1, y1, x2, y2).
         fps: Current processing FPS.
+        zones: Optional list of ZoneConfig objects for multi-zone overlay.
+        show_zones: Whether to draw perimeter zone boundaries on the frame.
 
     Returns:
         Annotated frame.
     """
     h, w = frame.shape[:2]
 
-    # Draw intrusion zone
-    _draw_intrusion_zone(frame, intrusion_zone, w, h)
+    # Draw surveillance zones (if requested)
+    if show_zones:
+        if zones:
+            _draw_multi_zones(frame, zones, w, h)
+        else:
+            _draw_intrusion_zone(frame, intrusion_zone, w, h)
 
     # Draw tracked objects with bounding boxes and labels
     for obj in tracked_objects:
@@ -93,6 +103,67 @@ def draw_frame_overlay(
     _draw_hud(frame, fps, len(tracked_objects))
 
     return frame
+
+
+def _draw_multi_zones(
+    frame: np.ndarray,
+    zones: list,
+    w: int,
+    h: int,
+) -> None:
+    """Draw multiple surveillance zones with type-specific styling."""
+    overlay = frame.copy()
+
+    for zone in zones:
+        if not getattr(zone, "is_active", True):
+            continue
+
+        coords = getattr(zone, "coords", (0.0, 0.0, 1.0, 1.0))
+        x1 = int(coords[0] * w)
+        y1 = int(coords[1] * h)
+        x2 = int(coords[2] * w)
+        y2 = int(coords[3] * h)
+
+        zone_type = getattr(zone, "zone_type", "restricted")
+        if str(zone_type) == "ZoneType.EXCLUDED" or zone_type == "excluded":
+            # Cyan/Blue for authorized waiting areas
+            fill_color = (200, 100, 0)
+            border_color = (255, 200, 50)
+            tag = f"[EXCLUDED] {zone.name.upper()}"
+        else:
+            # Red for restricted perimeter
+            fill_color = (0, 0, 200)
+            border_color = (0, 0, 255)
+            tag = f"[RESTRICTED] {zone.name.upper()}"
+
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), fill_color, -1)
+
+    cv2.addWeighted(overlay, 0.12, frame, 0.88, 0, frame)
+
+    for zone in zones:
+        if not getattr(zone, "is_active", True):
+            continue
+
+        coords = getattr(zone, "coords", (0.0, 0.0, 1.0, 1.0))
+        x1 = int(coords[0] * w)
+        y1 = int(coords[1] * h)
+        x2 = int(coords[2] * w)
+        y2 = int(coords[3] * h)
+
+        zone_type = getattr(zone, "zone_type", "restricted")
+        if str(zone_type) == "ZoneType.EXCLUDED" or zone_type == "excluded":
+            border_color = (255, 200, 50)
+            tag = f"[EXCLUDED] {zone.name.upper()}"
+        else:
+            border_color = (0, 0, 255)
+            tag = f"[RESTRICTED] {zone.name.upper()}"
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), border_color, 2)
+        cv2.putText(
+            frame, tag,
+            (x1 + 8, y1 + 22),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, border_color, 2,
+        )
 
 
 def _draw_intrusion_zone(

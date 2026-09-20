@@ -36,9 +36,17 @@ class Settings(BaseSettings):
 
     # Behavior thresholds
     loitering_threshold_seconds: int = 30
-    intrusion_zone: str = "0.6,0.0,1.0,1.0"
+    intrusion_zone: str = "0.8,0.0,1.0,1.0"
     unattended_object_seconds: int = 15
     alert_cooldown_seconds: int = 30
+    enable_firearm_model: bool = True
+    # Gun (fine-tuned model) confidence threshold.
+    # Must be ~0.35 so the sparse inference frames (every 8th raw frame) catch
+    # the real handgun clip, whose conf oscillates ~0.35-0.64. Confirmed by
+    # simulating the app's exact inference cadence (0.35 => solid alert, 0.40 => miss).
+    gun_confidence: float = 0.35
+    # Frames a weapon must persist before an alert is confirmed (reduces flicker/FPs)
+    weapon_confirm_frames: int = 6
 
     # CORS
     frontend_url: str = "http://localhost:8080"
@@ -85,18 +93,38 @@ class Settings(BaseSettings):
         try:
             parts = [float(x.strip()) for x in self.intrusion_zone.split(",")]
         except (TypeError, ValueError):
-            return (0.6, 0.0, 1.0, 1.0)
+            return (0.8, 0.0, 1.0, 1.0)
 
         if len(parts) != 4:
-            return (0.6, 0.0, 1.0, 1.0)
+            return (0.8, 0.0, 1.0, 1.0)
 
         x1, y1, x2, y2 = parts
         if not (0.0 <= x1 <= 1.0 and 0.0 <= y1 <= 1.0 and 0.0 <= x2 <= 1.0 and 0.0 <= y2 <= 1.0):
-            return (0.6, 0.0, 1.0, 1.0)
+            return (0.8, 0.0, 1.0, 1.0)
         if x1 >= x2 or y1 >= y2:
-            return (0.6, 0.0, 1.0, 1.0)
+            return (0.8, 0.0, 1.0, 1.0)
 
         return (x1, y1, x2, y2)
+
+    def get_default_zones(self) -> list:
+        """Return default multi-zone configuration with restricted and excluded zones."""
+        from app.models.schemas import ZoneConfig, ZoneType
+        return [
+            ZoneConfig(
+                id="staff_restricted_corridor",
+                name="Staff Only Corridor",
+                zone_type=ZoneType.RESTRICTED,
+                coords=self.intrusion_zone_coords,
+                is_active=True,
+            ),
+            ZoneConfig(
+                id="public_waiting_area",
+                name="Public Waiting Area",
+                zone_type=ZoneType.EXCLUDED,
+                coords=(0.0, 0.0, 0.35, 1.0),
+                is_active=True,
+            ),
+        ]
 
 
 @lru_cache()

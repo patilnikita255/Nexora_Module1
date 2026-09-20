@@ -151,23 +151,34 @@ def send_alert_notification(
 
 def _friendly_alert_title(alert: Alert) -> str:
     """Map alert type to a plain-English title."""
+    atype = alert.alert_type.value
+    if atype == "weapon_detected":
+        msg_lower = alert.message.lower()
+        if "knife" in msg_lower:
+            return "Dangerous Weapon Detected: KNIFE"
+        elif any(w in msg_lower for w in ("gun", "firearm", "pistol", "rifle")):
+            return "Lethal Threat Detected: FIREARM / GUN"
+        return "Dangerous Weapon Detected"
+    elif atype == "intrusion":
+        zone_str = f": {alert.zone_name}" if alert.zone_name else ""
+        return f"Unauthorized Perimeter Intrusion{zone_str}"
+    elif atype == "unattended_object":
+        return "Unattended Object Detected (Owner Left Area)"
+
     titles = {
         "loitering": "Suspicious Loitering Detected",
-        "intrusion": "Unauthorized Entry Into Restricted Zone",
-        "unattended_object": "Unattended Bag or Object Found",
         "suspicious_activity": "Suspicious Activity Detected",
-        "weapon_detected": "⚠️ Weapon Detected",
     }
-    return titles.get(alert.alert_type.value, "Security Alert")
+    return titles.get(atype, "Security Alert")
 
 
 def _friendly_severity(alert: Alert) -> str:
     """Map severity to a human-readable urgency level."""
     levels = {
-        "low": "Low Priority — For your awareness",
-        "medium": "Medium Priority — Please review when possible",
-        "high": "High Priority — Requires prompt attention",
-        "critical": "🚨 CRITICAL — Immediate action required",
+        "low": "Low Priority - For your awareness",
+        "medium": "Medium Priority - Please review when possible",
+        "high": "High Priority - Requires prompt attention",
+        "critical": "CRITICAL - Immediate action required",
     }
     return levels.get(alert.severity.value, alert.severity.value.upper())
 
@@ -177,28 +188,38 @@ def _friendly_description(alert: Alert) -> str:
     atype = alert.alert_type.value
     dur = int(alert.duration_seconds)
 
-    if atype == "loitering":
+    if atype == "intrusion":
+        zone_str = f"the restricted area '{alert.zone_name}'" if alert.zone_name else "a restricted or off-limits zone"
         return (
-            f"A person has been standing in the same area for an unusually "
-            f"long time ({dur} seconds). This may indicate suspicious behavior "
-            f"that warrants a closer look."
-        )
-    elif atype == "intrusion":
-        return (
-            f"A person has entered a restricted or off-limits zone and has "
-            f"been there for {dur} seconds. Please verify whether this "
-            f"person is authorized to be in that area."
+            f"A person (ID:{alert.object_id or 'Unknown'}) has breached {zone_str} and has "
+            f"remained inside for {dur} seconds. Please verify authorization immediately."
         )
     elif atype == "unattended_object":
+        owner_info = ""
+        if "Owner:" in alert.message:
+            owner_part = alert.message.split("Owner:")[1].split(")")[0].strip()
+            owner_info = f" The item was previously associated with {owner_part}, who has now walked away."
         return (
-            f"A bag or personal item has been left unattended for {dur} "
-            f"seconds with no owner nearby. This could be a safety concern."
+            f"A bag or personal item has been left unattended for {dur} seconds with no owner nearby.{owner_info} "
+            f"Please inspect the item for security compliance."
         )
     elif atype == "weapon_detected":
+        msg_lower = alert.message.lower()
+        if "knife" in msg_lower:
+            weapon_str = "a KNIFE (edged weapon)"
+        elif any(w in msg_lower for w in ("gun", "firearm", "pistol", "rifle")):
+            weapon_str = "a FIREARM / GUN (lethal weapon)"
+        else:
+            weapon_str = "a dangerous weapon"
+
         return (
-            "A potential weapon has been detected on camera. "
-            "Please assess the situation immediately and contact "
-            "security or emergency services if necessary."
+            f"CRITICAL THREAT: {weapon_str.upper()} has been detected on surveillance.\n"
+            f"  Threat Details:   {alert.message}\n"
+            f"  Action Required:  Assess situation immediately and dispatch security personnel."
+        )
+    elif atype == "loitering":
+        return (
+            f"A person has been standing in the area for {dur} seconds."
         )
     else:
         return alert.message
@@ -212,29 +233,41 @@ def _format_email_body(alert: Alert) -> str:
     time_str = alert.timestamp.strftime("%B %d, %Y at %I:%M:%S %p (UTC)")
 
     lines = [
-        f"🔔  SECURITY ALERT: {title}",
+        f"[SECURITY ALERT] {title}",
         f"{'=' * 50}",
         "",
         f"Urgency:      {urgency}",
         f"Detected at:  {time_str}",
+    ]
+
+    if alert.alert_type.value == "weapon_detected":
+        msg_lower = alert.message.lower()
+        w_name = "KNIFE (Edged Weapon)" if "knife" in msg_lower else ("FIREARM / HANDGUN" if any(w in msg_lower for w in ("gun", "firearm", "pistol", "rifle")) else "DANGEROUS WEAPON")
+        lines.append(f"Threat Type:  {w_name}")
+    elif alert.alert_type.value == "intrusion" and alert.zone_name:
+        lines.append(f"Zone Name:    {alert.zone_name}")
+    elif alert.alert_type.value == "unattended_object" and "Owner:" in alert.message:
+        owner_part = alert.message.split("Owner:")[1].split(")")[0].strip()
+        lines.append(f"Owner Info:   {owner_part}")
+
+    lines.extend([
+        f"Confidence:   {alert.confidence:.0%}",
         "",
         f"What happened:",
         f"  {description}",
         "",
-        f"Detection confidence: {alert.confidence:.0%}",
-    ]
+    ])
 
     if alert.snapshot_url:
-        lines.append("")
-        lines.append("📷  A snapshot of the incident is attached to this email.")
+        lines.append("[SNAPSHOT] A photo snapshot of the incident is attached to this email.")
 
     lines.extend([
         "",
-        "—" * 50,
+        "-" * 50,
         "What should you do?",
-        "  • Review the camera feed for the area in question.",
-        "  • If the situation looks concerning, notify on-site security.",
-        "  • For weapon alerts, contact emergency services immediately.",
+        "  - Review the camera feed for the area in question.",
+        "  - If the situation looks concerning, notify on-site security.",
+        "  - For weapon alerts, contact emergency services immediately.",
         "",
         "This is an automated alert from the AI Video Surveillance System.",
         "If you believe this is a false alarm, no action is needed.",
@@ -268,22 +301,35 @@ def _send_email(alert: Alert, snapshot_path: Optional[str] = None) -> None:
 
     # Body
     body = _format_email_body(alert)
-    msg.attach(MIMEText(body, "plain"))
+    msg.attach(MIMEText(body, "plain", "utf-8"))
 
     # Snapshot attachment (if exists)
-    if snapshot_path and os.path.isfile(snapshot_path):
-        try:
-            with open(snapshot_path, "rb") as f:
-                part = MIMEBase("image", "jpeg")
-                part.set_payload(f.read())
-                encoders.encode_base64(part)
-                part.add_header(
-                    "Content-Disposition",
-                    f'attachment; filename="{os.path.basename(snapshot_path)}"',
-                )
-                msg.attach(part)
-        except Exception as exc:
-            logger.warning("[Notifier] Failed to attach snapshot: %s", exc)
+    if snapshot_path:
+        base_filename = os.path.basename(snapshot_path)
+        app_backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        candidate_paths = [
+            snapshot_path,
+            os.path.join(settings.snapshots_dir, base_filename),
+            os.path.join(app_backend_dir, settings.snapshots_dir, base_filename),
+            os.path.join(app_backend_dir, "snapshots", base_filename),
+        ]
+        resolved_path = next((p for p in candidate_paths if os.path.isfile(p)), None)
+        if resolved_path:
+            try:
+                with open(resolved_path, "rb") as f:
+                    part = MIMEBase("image", "jpeg")
+                    part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header(
+                        "Content-Disposition",
+                        f'attachment; filename="{base_filename}"',
+                    )
+                    msg.attach(part)
+                    logger.info("[Notifier] Attached snapshot image: %s", base_filename)
+            except Exception as exc:
+                logger.warning("[Notifier] Failed to attach snapshot: %s", exc)
+        else:
+            logger.warning("[Notifier] Snapshot file not found at any candidate path: %s", snapshot_path)
 
     # Send
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
@@ -302,24 +348,27 @@ def _format_sms_body(alert: Alert) -> str:
     """Build a compact but human-readable SMS body."""
     title = _friendly_alert_title(alert)
     dur = int(alert.duration_seconds)
-    severity = alert.severity.value.capitalize()
+    severity = alert.severity.value.upper()
     time_str = alert.timestamp.strftime("%I:%M:%S %p")
 
-    # Keep it short but understandable
     atype = alert.alert_type.value
-    if atype == "loitering":
-        detail = f"Person in area for {dur}s."
-    elif atype == "intrusion":
-        detail = f"Person in restricted zone for {dur}s."
+    if atype == "intrusion":
+        zone = alert.zone_name or "Restricted Zone"
+        detail = f"Intruder in '{zone}' ({dur}s)."
     elif atype == "unattended_object":
-        detail = f"Unattended item for {dur}s."
+        owner = ""
+        if "Owner:" in alert.message:
+            owner = f" [{alert.message.split('Owner:')[1].split(')')[0].strip()}]"
+        detail = f"Unattended item{owner} ({dur}s)."
     elif atype == "weapon_detected":
-        detail = "Immediate attention needed!"
+        msg_lower = alert.message.lower()
+        w_tag = "KNIFE" if "knife" in msg_lower else ("GUN/FIREARM" if any(w in msg_lower for w in ("gun", "firearm", "pistol", "rifle")) else "WEAPON")
+        detail = f"[CRITICAL THREAT] {w_tag} DETECTED! Urgent response required."
     else:
         detail = alert.message[:60]
 
     return (
-        f"🔔 {title}\n"
+        f"[ALERT] {title}\n"
         f"{detail}\n"
         f"Priority: {severity} | {time_str}"
     )

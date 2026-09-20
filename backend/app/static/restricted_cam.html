@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Restricted Area Perimeter Terminal — AI Surveillance</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #06090e;
+      --bg-surface: #0d121d;
+      --bg-card: rgba(15, 23, 42, 0.75);
+      --border: rgba(255, 255, 255, 0.08);
+      --danger: #ef4444;
+      --danger-glow: rgba(239, 68, 68, 0.35);
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.3);
+      --warning: #f59e0b;
+      --info: #38bdf8;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Perimeter Hazard Stripes Bar (flashes during intrusion) */
+    .hazard-stripes-top {
+      height: 4px;
+      width: 100%;
+      background: repeating-linear-gradient(
+        45deg,
+        #1e293b,
+        #1e293b 10px,
+        #334155 10px,
+        #334155 20px
+      );
+      transition: background 0.3s ease;
+    }
+    .hazard-stripes-top.breached {
+      height: 6px;
+      background: repeating-linear-gradient(
+        45deg,
+        #ef4444,
+        #ef4444 14px,
+        #7f1d1d 14px,
+        #7f1d1d 28px
+      );
+      box-shadow: 0 0 15px rgba(239, 68, 68, 0.8);
+      animation: hazardSlide 1s linear infinite;
+    }
+
+    @keyframes hazardSlide {
+      0% { background-position: 0 0; }
+      100% { background-position: 40px 0; }
+    }
+
+    header {
+      background: rgba(10, 15, 26, 0.95);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(12px);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .terminal-badge {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #ef4444, #991b1b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 18px var(--danger-glow);
+    }
+    .terminal-badge svg {
+      width: 24px;
+      height: 24px;
+      stroke: #fff;
+      fill: none;
+      stroke-width: 2;
+    }
+    .brand-title h1 {
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      color: #fff;
+      text-transform: uppercase;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-title p {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+      border: 1px solid var(--border);
+      font-family: var(--font-sans);
+    }
+    .btn-nav {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-primary);
+    }
+    .btn-nav:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .status-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      letter-spacing: 0.05em;
+    }
+    .status-banner.secure {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: var(--success);
+    }
+    .status-banner.breached {
+      background: rgba(239, 68, 68, 0.25);
+      border: 1px solid rgba(239, 68, 68, 0.7);
+      color: #fca5a5;
+      animation: pulse 1s infinite;
+      box-shadow: 0 0 16px var(--danger-glow);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .secure .status-dot { background: var(--success); box-shadow: 0 0 8px var(--success); }
+    .breached .status-dot { background: var(--danger); box-shadow: 0 0 12px var(--danger); }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 420px;
+      gap: 20px;
+      padding: 20px 24px;
+      max-width: 1700px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    @media (max-width: 1150px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    .glass-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      backdrop-filter: blur(12px);
+      overflow: hidden;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Video Feed Wrapper */
+    .video-container {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 14px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+    }
+
+    #videoFeedImg {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+
+    /* Flashing Breach Alert Ribbon */
+    .breach-alert-ribbon {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: rgba(220, 38, 38, 0.95);
+      color: #fff;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+      letter-spacing: 0.05em;
+      text-align: center;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      z-index: 10;
+      box-shadow: 0 4px 15px rgba(239, 68, 68, 0.5);
+      animation: alertBlink 1s infinite alternate;
+    }
+    @keyframes alertBlink {
+      from { opacity: 0.9; }
+      to { opacity: 1; filter: brightness(1.2); }
+    }
+
+    .hud-cam-tag {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      background: rgba(0, 0, 0, 0.75);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #38bdf8;
+      z-index: 5;
+    }
+
+    .hud-metrics {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      background: rgba(0, 0, 0, 0.75);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #fff;
+      display: flex;
+      gap: 12px;
+      z-index: 5;
+    }
+
+    .video-container.drag-active {
+      border: 2px dashed #ef4444 !important;
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.5);
+    }
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(239, 68, 68, 0.2);
+      border-top-color: #ef4444;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Perimeter Corridor Visualizer */
+    .rz-corridor-wrapper {
+      margin: 14px 20px 0;
+      height: 34px;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      border: 1px solid var(--border);
+      background: #080c14;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+    }
+    .rz-corridor-safe {
+      flex: 80;
+      display: flex;
+      align-items: center;
+      padding-left: 14px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      background: rgba(56, 189, 248, 0.06);
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      font-weight: 500;
+    }
+    .rz-corridor-restricted {
+      flex: 20;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.18);
+      border-left: 2px dashed rgba(239, 68, 68, 0.5);
+      transition: all 0.3s ease;
+      letter-spacing: 0.05em;
+    }
+    .rz-corridor-restricted.active-breach {
+      background: repeating-linear-gradient(
+        45deg,
+        rgba(239, 68, 68, 0.5),
+        rgba(239, 68, 68, 0.5) 8px,
+        rgba(185, 28, 28, 0.7) 8px,
+        rgba(185, 28, 28, 0.7) 16px
+      );
+      color: #fff;
+      box-shadow: 0 0 16px rgba(239, 68, 68, 0.6);
+      animation: alertBlink 1s infinite;
+    }
+
+    .standby-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      text-align: center;
+      padding: 30px;
+    }
+
+    /* Controls Bar */
+    .controls-bar {
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      border-top: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.2);
+    }
+    .btn-camera {
+      background: #10b981;
+      color: #fff;
+      border: none;
+    }
+    .btn-camera:hover { background: #059669; }
+    .btn-primary {
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+    }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    /* Zone Map & Details */
+    .zones-config-grid {
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .zone-box {
+      border-radius: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .zone-box.restricted {
+      border-left: 4px solid var(--danger);
+      background: rgba(239, 68, 68, 0.04);
+    }
+    .zone-box.excluded {
+      border-left: 4px solid var(--info);
+      background: rgba(56, 189, 248, 0.04);
+    }
+    .zone-box-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .zone-type-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+    }
+    .zone-type-badge.r { background: rgba(239,68,68,0.2); color: #f87171; }
+    .zone-type-badge.e { background: rgba(56,189,248,0.2); color: #7dd3fc; }
+    .zone-box-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    /* Right Sidebar: Intrusion Command Station */
+    .sidebar-section {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .telemetry-card {
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .telemetry-header {
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .metrics-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .metric-card {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      text-align: center;
+    }
+    .metric-card-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .metric-card-value {
+      font-size: 24px;
+      font-weight: 800;
+      color: #fff;
+      font-family: var(--font-mono);
+      transition: color 0.2s;
+    }
+    .metric-card-value.alerting {
+      color: var(--danger);
+      text-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+    }
+
+    /* Breach Incident Log */
+    .incidents-card {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-height: 540px;
+    }
+    .incidents-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .incidents-list {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .incident-item {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--danger);
+      border-radius: 8px;
+      padding: 10px 12px;
+      transition: background 0.2s;
+    }
+    .incident-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .incident-item-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .incident-time {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+    .incident-msg {
+      font-size: 11px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+      margin-bottom: 6px;
+    }
+    .incident-snapshot {
+      width: 100%;
+      height: 90px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+    }
+
+    .empty-state {
+      padding: 30px 20px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .modal-box {
+      max-width: 850px;
+      width: 100%;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .modal-box img { width: 100%; display: block; }
+    .modal-head {
+      padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 20px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="hazard-stripes-top" id="hazardStripes"></div>
+
+  <!-- Header -->
+  <header>
+    <div class="brand-section">
+      <div class="terminal-badge">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </div>
+      <div class="brand-title">
+        <h1>Dashboard 2: Restricted Area Security Dashboard</h1>
+        <p>COMBINED SURVEILLANCE // PERIMETER INTRUSION + WEAPONS + UNATTENDED OBJECTS</p>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <div class="status-banner secure" id="terminalStatus">
+        <span class="status-dot"></span>
+        <span id="statusLabel">PERIMETER SECURE</span>
+      </div>
+
+      <a href="/" class="btn btn-nav" style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.35); color: #93c5fd; font-weight: 600;">
+        <svg style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><polygon points="19 12 5 12 12 19 12 5"/></svg>
+        &larr; Switch to Dashboard 1 (General Area Monitor)
+      </a>
+      <a href="/docs" target="_blank" class="btn btn-nav">
+        <svg style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        FastAPI /docs
+      </a>
+    </div>
+  </header>
+
+  <!-- Main View -->
+  <main>
+    <!-- Left Column: Focused Camera Feed & Multi-Zone Details -->
+    <div style="display: flex; flex-direction: column; gap: 16px;">
+      <!-- Video Monitor -->
+      <div class="video-container" id="videoContainer">
+        <!-- Flashing Warning Ribbon -->
+        <div class="breach-alert-ribbon" id="breachRibbon">
+          <svg style="width: 18px; height: 18px; fill: none; stroke: #fff; stroke-width: 2;" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span>WARNING: UNAUTHORIZED INTRUSION DETECTED IN RESTRICTED PERIMETER</span>
+        </div>
+
+        <div class="hud-cam-tag">CAM-02 // RESTRICTED AREA PERIMETER RADAR</div>
+        <div class="hud-metrics">
+          <div>FPS: <span id="hudFps">0.0</span></div>
+          <div>INTRUDERS: <span id="hudIntruders" style="color: #ef4444; font-weight: 700;">0</span></div>
+        </div>
+
+        <img id="videoFeedImg" alt="Restricted Zone Stream">
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="standby-state" style="display: none;">
+          <div class="spinner"></div>
+          <div style="font-size: 16px; font-weight: 700; color: #fff;" id="loadingTitle">Processing Perimeter Video...</div>
+          <div style="font-size: 12px; color: var(--text-muted); max-width: 340px;" id="loadingDesc">Uploading footage and analyzing multi-zone perimeters...</div>
+        </div>
+
+        <!-- Standby Placeholder -->
+        <div class="standby-state" id="standbyState">
+          <svg style="width: 52px; height: 52px; stroke: #ef4444; fill: none; stroke-width: 1.5;" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+          <div style="font-size: 17px; font-weight: 700; color: #fff;">Restricted Area Cam Feed Standby</div>
+          <div style="font-size: 12px; color: var(--text-muted); max-width: 360px;">
+            Upload security video footage or connect live camera to monitor staff-only corridors and authorized zones in real time.
+          </div>
+          <div style="display: flex; gap: 12px; margin-top: 10px;">
+            <button class="btn btn-camera" onclick="startWebcam()">
+              <svg style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              Start Live Camera
+            </button>
+            <button class="btn btn-primary" onclick="document.getElementById('restrictedVideoFile').click()">
+              <svg style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload Perimeter Video
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dedicated Video Upload & Controls Card for Restricted Area -->
+      <div class="glass-card">
+        <div class="controls-bar">
+          <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <button class="btn btn-camera" onclick="startWebcam()">
+              <svg style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              Start Live Camera
+            </button>
+            <button class="btn btn-primary" onclick="document.getElementById('restrictedVideoFile').click()">
+              <svg style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload Security Video
+            </button>
+            <input type="file" id="restrictedVideoFile" style="display: none;" accept=".mp4,.avi,.mkv,.mov,.webm" onchange="uploadVideo(event)">
+            <button class="btn btn-danger" onclick="stopStream()">
+              <svg style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+              Stop Stream
+            </button>
+          </div>
+
+          <div style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">
+            Perimeter Source: <span id="sourceLabel" style="color: #38bdf8; font-weight: 600;">None</span>
+          </div>
+        </div>
+
+        <!-- Perimeter Corridor Visualizer -->
+        <div class="rz-corridor-wrapper">
+          <div class="rz-corridor-safe">
+            <span>Authorized Public Area (0% &ndash; 80%)</span>
+          </div>
+          <div class="rz-corridor-restricted" id="rzCorridorBar">
+            <span>🚫 RESTRICTED CORRIDOR (20%)</span>
+          </div>
+        </div>
+
+        <!-- Active Surveillance Zones Display -->
+        <div class="zones-config-grid" id="zonesGrid">
+          <div class="zone-box restricted">
+            <div class="zone-box-title">
+              <span>Staff Only Corridor</span>
+              <span class="zone-type-badge r">Restricted</span>
+            </div>
+            <div class="zone-box-desc">Right 20% Corridor (Normalized X: 0.80 &rarr; 1.00)</div>
+          </div>
+          <div class="zone-box excluded">
+            <div class="zone-box-title">
+              <span>Public Waiting Area</span>
+              <span class="zone-type-badge e">Excluded</span>
+            </div>
+            <div class="zone-box-desc">Left 35% Area (Authorized &mdash; Suppresses False Alarms)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Perimeter Defense Command & Incident Log -->
+    <div class="sidebar-section">
+      <!-- Live Metrics Card -->
+      <div class="glass-card telemetry-card">
+        <div class="telemetry-header">
+          <span>Perimeter Defense Status</span>
+          <span style="font-family: var(--font-mono); font-size: 11px; color: #38bdf8;">ACTIVE RADAR</span>
+        </div>
+
+        <div class="metrics-row">
+          <div class="metric-card">
+            <div class="metric-card-label">Active Intruders</div>
+            <div class="metric-card-value" id="activeIntrudersVal">0</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-card-label">Total Incidents</div>
+            <div class="metric-card-value" id="totalBreachesVal">0</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dedicated Intrusion Incidents Feed -->
+      <div class="glass-card incidents-card">
+        <div class="incidents-header">
+          <div style="font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 8px;">
+            <svg style="width: 14px; height: 14px; stroke: #ef4444; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>Combined Security Incident Feed</span>
+          </div>
+          <button class="btn btn-nav" style="padding: 4px 10px; font-size: 11px;" onclick="clearAlerts()">Clear</button>
+        </div>
+
+        <div class="incidents-list" id="incidentsList">
+          <div class="empty-state">No perimeter breaches detected. Area is secure.</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Snapshot Modal -->
+  <div id="snapshotModal" class="modal-backdrop" onclick="closeModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <span id="modalTitle">Intrusion Snapshot Evidence</span>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <img id="modalImg" src="" alt="Snapshot Evidence">
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin;
+    let isStreaming = false;
+
+    function openModal(src, title) {
+      document.getElementById('modalImg').src = src;
+      document.getElementById('modalTitle').innerText = title || "Intrusion Snapshot Evidence";
+      document.getElementById('snapshotModal').style.display = 'flex';
+    }
+    function closeModal() {
+      document.getElementById('snapshotModal').style.display = 'none';
+    }
+
+    async function startWebcam() {
+      try {
+        const res = await fetch(`${API_BASE}/api/webcam?mode=restricted`, { method: "POST" });
+        if (!res.ok) throw new Error("Failed to start live camera");
+        setStreamState(true, "Webcam 0");
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function uploadVideo(e) {
+      const file = e.target && e.target.files ? e.target.files[0] : (e.dataTransfer ? e.dataTransfer.files[0] : null);
+      if (!file) return;
+
+      const standby = document.getElementById('standbyState');
+      const loading = document.getElementById('loadingOverlay');
+      const img = document.getElementById('videoFeedImg');
+
+      standby.style.display = 'none';
+      img.style.display = 'none';
+      loading.style.display = 'flex';
+      document.getElementById('loadingTitle').innerText = 'Uploading Perimeter Video...';
+      document.getElementById('loadingDesc').innerText = `Uploading ${file.name} to Restricted Area Cam...`;
+
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("mode", "restricted");
+      try {
+        const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: fd });
+        if (!res.ok) throw new Error("Failed to upload video");
+        setStreamState(true, file.name);
+      } catch (err) {
+        alert("Upload error: " + err.message);
+        setStreamState(false);
+      } finally {
+        if (e.target && e.target.value !== undefined) e.target.value = "";
+      }
+    }
+
+    async function stopStream() {
+      try {
+        await fetch(`${API_BASE}/api/stop`, { method: "POST" });
+        setStreamState(false);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function clearAlerts() {
+      try {
+        await fetch(`${API_BASE}/api/alerts`, { method: "DELETE" });
+        fetchAlerts();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function setStreamState(active, source = "") {
+      const img = document.getElementById('videoFeedImg');
+      const standby = document.getElementById('standbyState');
+      const loading = document.getElementById('loadingOverlay');
+      const sourceLabel = document.getElementById('sourceLabel');
+      if (active) {
+        standby.style.display = 'none';
+        img.style.display = 'none';
+        loading.style.display = 'flex';
+
+        const feedUrl = `${API_BASE}/api/video_feed?mode=restricted&t=${Date.now()}`;
+
+        img.onload = () => {
+          loading.style.display = 'none';
+          img.style.display = 'block';
+        };
+
+        img.onerror = () => {
+          console.warn("Retrying restricted video stream...");
+          setTimeout(() => {
+            if (isStreaming) {
+              img.src = `${API_BASE}/api/video_feed?mode=restricted&t=${Date.now()}`;
+            }
+          }, 1000);
+        };
+
+        // If the first frame never arrives (slow pipeline warm-up), rebind the
+        // stream so the loading state can't hang on a stale connection.
+        setTimeout(() => {
+          if (isStreaming && loading.style.display === 'flex') {
+            img.src = feedUrl;
+          }
+        }, 10000);
+
+        img.src = feedUrl;
+        sourceLabel.innerText = source || "Active Stream";
+        isStreaming = true;
+      } else {
+        img.onload = null;
+        img.onerror = null;
+        img.src = "";
+        img.style.display = 'none';
+        loading.style.display = 'none';
+        standby.style.display = 'flex';
+        sourceLabel.innerText = "None";
+        isStreaming = false;
+      }
+    }
+
+    // Drag & Drop onto Video Container
+    const dropZone = document.getElementById('videoContainer');
+    if (dropZone) {
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('drag-active');
+      });
+      dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('drag-active');
+      });
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('drag-active');
+        uploadVideo(e);
+      });
+    }
+
+    // Poll Status
+    async function fetchStatus() {
+      try {
+        const res = await fetch(`${API_BASE}/api/status?camera=restricted`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        document.getElementById('hudFps').innerText = (data.fps || 0).toFixed(1);
+        const hudIntruders = document.getElementById('hudIntruders');
+        if (hudIntruders) hudIntruders.innerText = data.active_intruders || 0;
+
+        const isBreached = Boolean(data.zone_breached);
+        const intruders = data.active_intruders || 0;
+
+        const intrudersVal = document.getElementById('activeIntrudersVal');
+        intrudersVal.innerText = intruders;
+        if (intruders > 0) intrudersVal.classList.add('alerting');
+        else intrudersVal.classList.remove('alerting');
+
+        const ribbon = document.getElementById('breachRibbon');
+        const stripes = document.getElementById('hazardStripes');
+        const banner = document.getElementById('terminalStatus');
+        const statusLabel = document.getElementById('statusLabel');
+        const corridorBar = document.getElementById('rzCorridorBar');
+
+        if (isBreached) {
+          ribbon.style.display = 'flex';
+          stripes.classList.add('breached');
+          banner.className = 'status-banner breached';
+          statusLabel.innerText = '🚨 INTRUSION BREACH DETECTED';
+          if (corridorBar) corridorBar.classList.add('active-breach');
+        } else {
+          ribbon.style.display = 'none';
+          stripes.classList.remove('breached');
+          banner.className = 'status-banner secure';
+          statusLabel.innerText = 'PERIMETER SECURE';
+          if (corridorBar) corridorBar.classList.remove('active-breach');
+        }
+
+        if (data.is_running && !isStreaming) {
+          setStreamState(true, data.video_source || "Active Stream");
+        } else if (!data.is_running && isStreaming) {
+          setStreamState(false);
+        }
+      } catch (err) {}
+    }
+
+    // Poll Alerts (Dashboard 2: shows Intrusion + Weapons + Unattended Objects)
+    async function fetchAlerts() {
+      try {
+        const res = await fetch(`${API_BASE}/api/alerts?camera=restricted&limit=50`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const alerts = data.alerts || [];
+
+        document.getElementById('totalBreachesVal').innerText = alerts.length;
+
+        const list = document.getElementById('incidentsList');
+        if (alerts.length === 0) {
+          list.innerHTML = `<div class="empty-state">No security incidents detected. Area is secure.</div>`;
+          return;
+        }
+
+        list.innerHTML = alerts.map(alert => {
+          const snapUrl = alert.snapshot_url ? (alert.snapshot_url.startsWith('http') ? alert.snapshot_url : `${API_BASE}${alert.snapshot_url}`) : (alert.snapshot_path ? `${API_BASE}/api/snapshots/${alert.snapshot_path}` : null);
+          const snapHtml = snapUrl ? `
+            <img class="incident-snapshot" src="${snapUrl}" onclick="openModal('${snapUrl}', '${alert.message}')" alt="Incident Snapshot">
+          ` : '';
+
+          let badgeColor = "#f87171";
+          let badgeText = "RESTRICTED AREA BREACH";
+          let borderLeftColor = "var(--danger)";
+
+          if (alert.alert_type === 'weapon_detected') {
+            badgeColor = "#ef4444";
+            badgeText = "CRITICAL WEAPON DETECTED";
+            borderLeftColor = "#dc2626";
+          } else if (alert.alert_type === 'unattended_object') {
+            badgeColor = "#f59e0b";
+            badgeText = "UNATTENDED OBJECT";
+            borderLeftColor = "#f59e0b";
+          } else if (alert.zone_name) {
+            badgeText = `${alert.zone_name.toUpperCase()} INTRUSION`;
+          }
+
+          return `
+            <div class="incident-item" style="border-left-color: ${borderLeftColor};">
+              <div class="incident-item-header">
+                <span style="font-size: 11px; font-weight: 700; color: ${badgeColor};">${badgeText}</span>
+                <span class="incident-time">${new Date(alert.timestamp).toLocaleTimeString()}</span>
+              </div>
+              <div class="incident-msg">${alert.message}</div>
+              ${snapHtml}
+            </div>
+          `;
+        }).join('');
+      } catch (err) {}
+    }
+
+    // Poll dynamic zones from API
+    async function fetchZones() {
+      try {
+        const res = await fetch(`${API_BASE}/api/zones`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const zones = data.zones || [];
+        if (zones.length === 0) return;
+
+        const grid = document.getElementById('zonesGrid');
+        grid.innerHTML = zones.map(z => {
+          const isRestricted = (z.zone_type === 'restricted');
+          const cssClass = isRestricted ? 'restricted' : 'excluded';
+          const badgeClass = isRestricted ? 'r' : 'e';
+          const typeName = isRestricted ? 'Restricted' : 'Excluded';
+          const [x1, y1, x2, y2] = z.coords;
+          const pctW = Math.round((x2 - x1) * 100);
+
+          return `
+            <div class="zone-box ${cssClass}">
+              <div class="zone-box-title">
+                <span>${z.name}</span>
+                <span class="zone-type-badge ${badgeClass}">${typeName}</span>
+              </div>
+              <div class="zone-box-desc">Coverage: ${pctW}% Width (X: ${x1.toFixed(2)} &rarr; ${x2.toFixed(2)})</div>
+            </div>
+          `;
+        }).join('');
+      } catch (err) {}
+    }
+
+    fetchZones();
+    fetchStatus();
+    fetchAlerts();
+    setInterval(fetchStatus, 800);
+    setInterval(fetchAlerts, 1200);
+  </script>
+</body>
+</html>

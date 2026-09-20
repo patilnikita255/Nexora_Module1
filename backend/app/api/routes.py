@@ -19,14 +19,17 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Form
 from fastapi.responses import StreamingResponse, FileResponse
 
 from app.config import get_settings
 from app.models.schemas import (
+    AlertType,
     ConfigResponse,
     FrameMetadata,
     SystemStatus,
+    ZoneConfig,
+    ZoneListResponse,
 )
 from app.services.video_processor import VideoProcessor
 
@@ -37,11 +40,14 @@ processor = VideoProcessor()
 
 
 @router.post("/upload")
-async def upload_video(file: UploadFile = File(...)):
+async def upload_video(
+    file: UploadFile = File(...),
+    mode: str = Form(default="main"),
+):
     """
     Upload a video file and automatically start processing it.
     File is saved first, then processing starts in a background thread.
-    This endpoint returns immediately after saving the file.
+    Mode: 'main' (weapons & unattended objects only) or 'restricted' (perimeter intrusion only).
     """
     settings = get_settings()
 
@@ -63,10 +69,10 @@ async def upload_video(file: UploadFile = File(...)):
         f.write(content)
 
     file_size_mb = len(content) / (1024 * 1024)
-    print(f"[Upload] Saved: {file.filename} ({file_size_mb:.1f} MB)")
+    print(f"[Upload] Saved: {file.filename} ({file_size_mb:.1f} MB) [Mode: {mode}]")
 
     # Start processing in background thread — does NOT block this response
-    success = processor.start(file_path)
+    success = processor.start(file_path, mode=mode)
     if not success:
         raise HTTPException(
             status_code=500,
@@ -76,12 +82,13 @@ async def upload_video(file: UploadFile = File(...)):
     return {
         "message": "Video uploaded and processing started",
         "filename": file.filename,
+        "mode": mode,
         "size_mb": round(file_size_mb, 2),
     }
 
 
 @router.post("/start")
-async def start_processing(source: Optional[str] = None):
+async def start_processing(source: Optional[str] = None, mode: str = "main"):
     """
     Start processing a video file (must already exist in uploads/).
     If no source specified, uses the most recently uploaded file.
@@ -107,7 +114,7 @@ async def start_processing(source: Optional[str] = None):
 
         video_path = max(files, key=os.path.getmtime)
 
-    success = processor.start(video_path)
+    success = processor.start(video_path, mode=mode)
     if not success:
         raise HTTPException(
             status_code=500,
@@ -116,7 +123,27 @@ async def start_processing(source: Optional[str] = None):
 
     return {
         "message": "Processing started",
+        "mode": mode,
         "source": os.path.basename(video_path),
+    }
+
+
+@router.post("/webcam")
+async def start_webcam(camera_id: int = 0, mode: str = "main"):
+    """
+    Start processing from a live camera / webcam.
+    Defaults to camera index 0.
+    """
+    success = processor.start(camera_id, mode=mode)
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to open camera (index {camera_id}). Please ensure a webcam is connected and accessible.",
+        )
+    return {
+        "message": "Live camera processing started",
+        "mode": mode,
+        "source": f"Webcam {camera_id}",
     }
 
 
@@ -128,9 +155,9 @@ async def stop_processing():
 
 
 @router.get("/status")
-async def get_status():
+async def get_status(camera: Optional[str] = Query(default=None)):
     """Get current system status including FPS, object count, alerts."""
-    status = processor.get_status()
+    status = processor.get_status(mode=camera)
     # Add init_error to response if pipeline failed to start
     result = status.model_dump()
     if processor.init_error:
@@ -145,25 +172,71 @@ async def get_frame_metadata():
 
 
 @router.get("/video_feed")
-async def video_feed():
+async def video_feed(mode: str = "main"):
     """
     MJPEG video stream endpoint.
-    Use as <img src="/api/video_feed" /> in the frontend.
+    Use as <img src="/api/video_feed" /> or <img src="/api/video_feed?mode=restricted" />.
     """
     if not processor.is_running:
         raise HTTPException(status_code=503, detail="No video is being processed.")
 
     return StreamingResponse(
-        processor.generate_mjpeg(),
+        processor.generate_mjpeg(mode=mode),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
 
 @router.get("/alerts")
-async def get_alerts(limit: int = Query(default=50, ge=1, le=500)):
-    """Get latest alerts, most recent first."""
-    alerts = processor.alert_manager.get_alerts(limit=limit)
-    return {"alerts": alerts, "total": processor.alert_manager.alert_count}
+async def get_alerts(
+    limit: int = Query(default=50, ge=1, le=500),
+    camera: Optional[str] = Query(default=None),
+    dashboard: Optional[str] = Query(default=None),
+    type: Optional[str] = Query(default=None),
+    types: Optional[str] = Query(default=None),
+):
+    """
+    Get latest alerts filtered by dashboard, camera, or explicit types.
+
+    Filters:
+      - dashboard='general' or camera='main':
+          Dashboard 1: Weapon & Unauthorized-Object Monitor (excludes Intrusion).
+      - dashboard='restricted' or camera='restricted':
+          Dashboard 2: Restricted Area Security Dashboard (Shows EVERYTHING: Intrusion + Weapon + Unattended Object).
+      - type/types='weapon,unattended' vs 'intrusion,weapon,unattended':
+          Direct query over shared alert stream.
+    """
+    filter_mode = (dashboard or camera or "").strip().lower()
+    type_query = type or types
+
+    target_types = None
+    if type_query:
+        req_types = set()
+        for t in type_query.split(","):
+            t_norm = t.strip().lower()
+            if t_norm in ("weapon", "weapon_detected", "weapons"):
+                req_types.add(AlertType.WEAPON_DETECTED)
+            elif t_norm in ("unattended", "unattended_object", "bag", "bags"):
+                req_types.add(AlertType.UNATTENDED_OBJECT)
+            elif t_norm in ("intrusion", "zone", "perimeter"):
+                req_types.add(AlertType.INTRUSION)
+        if req_types:
+            target_types = req_types
+
+    if target_types is None:
+        if filter_mode in ("main", "general", "open_area"):
+            # Dashboard 1: strictly weapons and unattended objects
+            target_types = {AlertType.WEAPON_DETECTED, AlertType.UNATTENDED_OBJECT}
+        elif filter_mode in ("restricted", "security"):
+            # Dashboard 2: complete picture (intrusion + weapon + unattended)
+            target_types = {
+                AlertType.INTRUSION,
+                AlertType.WEAPON_DETECTED,
+                AlertType.UNATTENDED_OBJECT,
+            }
+
+    alerts = processor.alert_manager.get_alerts(limit=limit, alert_types=target_types)
+    return {"alerts": alerts, "total": len(alerts)}
+
 
 
 @router.delete("/alerts")
@@ -196,4 +269,34 @@ async def get_config():
         intrusion_zone=settings.intrusion_zone_coords,
         unattended_object_seconds=settings.unattended_object_seconds,
         alert_cooldown_seconds=settings.alert_cooldown_seconds,
+        zones=processor.get_zones(),
     )
+
+
+@router.get("/zones", response_model=ZoneListResponse)
+async def get_zones():
+    """Get all configured surveillance zones (restricted, excluded, monitored)."""
+    zones = processor.get_zones()
+    return ZoneListResponse(zones=zones, total=len(zones))
+
+
+@router.post("/zones")
+async def add_or_update_zone(zone: ZoneConfig):
+    """
+    Create or update a surveillance zone.
+    Zone types:
+      - 'restricted': raises intrusion alarms
+      - 'excluded': waiting area / public zone (suppresses intrusion alarms)
+      - 'monitored': informational tracking zone
+    """
+    processor.add_zone(zone)
+    return {"message": f"Zone '{zone.name}' successfully configured", "zone": zone}
+
+
+@router.delete("/zones/{zone_id}")
+async def delete_zone(zone_id: str):
+    """Delete a surveillance zone by ID."""
+    removed = processor.remove_zone(zone_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Zone '{zone_id}' not found")
+    return {"message": f"Zone '{zone_id}' successfully removed"}

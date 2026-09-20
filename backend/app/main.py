@@ -10,9 +10,12 @@ Creates and configures the FastAPI app with:
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router, processor
 from app.config import ensure_directories, get_settings
@@ -72,15 +75,35 @@ def create_app() -> FastAPI:
     # Register API routes
     app.include_router(router)
 
-    # Root endpoint
+    # Static files and Web UI
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    # Root endpoint serves Web UI if available, else API info
     @app.get("/")
     async def root():
+        index_file = static_dir / "index.html"
+        if index_file.is_file():
+            return FileResponse(index_file)
         return {
             "name": "AI Video Surveillance System",
             "version": "1.0.0",
             "docs": "/docs",
             "status": "/api/status",
         }
+
+    # Dedicated Restricted Area Camera Terminal UI
+    @app.get("/restricted")
+    @app.get("/restricted-cam")
+    async def restricted_cam_page():
+        page = static_dir / "restricted_cam.html"
+        if page.is_file():
+            return FileResponse(page)
+        index_file = static_dir / "index.html"
+        if index_file.is_file():
+            return FileResponse(index_file)
+        return {"message": "Restricted Cam UI"}
 
     return app
 

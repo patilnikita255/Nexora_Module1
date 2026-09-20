@@ -1,0 +1,1310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Video Surveillance System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #0a0e17;
+      --bg-surface: #111827;
+      --bg-card: rgba(17, 24, 39, 0.75);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-active: rgba(59, 130, 246, 0.4);
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --primary-glow: rgba(59, 130, 246, 0.25);
+      --danger: #ef4444;
+      --danger-glow: rgba(239, 68, 68, 0.25);
+      --warning: #f59e0b;
+      --success: #10b981;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Ambient background glows */
+    .ambient-glow {
+      position: fixed;
+      width: 500px;
+      height: 500px;
+      border-radius: 50%;
+      filter: blur(140px);
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.15;
+    }
+    .glow-1 { top: -100px; left: -100px; background: var(--primary); }
+    .glow-2 { bottom: -100px; right: -100px; background: #6366f1; }
+
+    /* Header */
+    header {
+      position: relative;
+      z-index: 10;
+      border-bottom: 1px solid var(--border);
+      background: rgba(11, 15, 25, 0.85);
+      backdrop-filter: blur(12px);
+      padding: 14px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .shield-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 12px var(--primary-glow);
+    }
+    .shield-icon svg {
+      width: 20px;
+      height: 20px;
+      fill: none;
+      stroke: #fff;
+      stroke-width: 2;
+    }
+
+    .brand-text h1 {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: #fff;
+    }
+    .brand-text p {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 5px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: var(--font-mono);
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+    .status-dot.active {
+      background: var(--success);
+      box-shadow: 0 0 10px var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.3); opacity: 0.7; }
+    }
+
+    /* Main Container */
+    main {
+      position: relative;
+      z-index: 1;
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 20px;
+      padding: 20px 28px;
+      max-width: 1600px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    @media (max-width: 1100px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Video Feed Column */
+    .video-section {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .glass-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+      overflow: hidden;
+    }
+
+    /* Video Container */
+    .video-feed-wrapper {
+      position: relative;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 16px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+    }
+
+    #videoFeedImg {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(59, 130, 246, 0.2);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Standby screen */
+    .standby-overlay {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      text-align: center;
+      padding: 32px;
+      width: 100%;
+      height: 100%;
+    }
+    .standby-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px dashed rgba(59, 130, 246, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .standby-icon svg {
+      width: 32px;
+      height: 32px;
+      stroke: var(--primary);
+      fill: none;
+      stroke-width: 1.5;
+    }
+    .standby-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .standby-desc {
+      font-size: 13px;
+      color: var(--text-secondary);
+      max-width: 360px;
+    }
+
+    /* Video HUD */
+    .video-hud {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 5;
+    }
+    .badge-live {
+      background: rgba(239, 68, 68, 0.9);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 2px 8px var(--danger-glow);
+    }
+    .badge-live-dot {
+      width: 6px;
+      height: 6px;
+      background: #fff;
+      border-radius: 50%;
+      animation: pulse 1s infinite;
+    }
+
+    .video-metrics-overlay {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-primary);
+      display: flex;
+      gap: 14px;
+      z-index: 5;
+    }
+
+    /* Controls Bar */
+    .controls-card {
+      padding: 18px 24px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .btn-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: 1px solid transparent;
+      outline: none;
+      font-family: var(--font-sans);
+    }
+    .btn svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2;
+      fill: none;
+      stroke: currentColor;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      box-shadow: 0 4px 14px var(--primary-glow);
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+
+    .btn-camera {
+      background: #10b981;
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25);
+    }
+    .btn-camera:hover {
+      background: #059669;
+      transform: translateY(-1px);
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-primary);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.09);
+    }
+
+    .file-input-wrapper input[type="file"] {
+      display: none;
+    }
+
+    /* Stats Quick Bar */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .stat-item {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 16px;
+    }
+    .stat-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .stat-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      font-family: var(--font-mono);
+    }
+
+    /* Alerts Panel */
+    .alerts-sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel-header {
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .panel-title {
+      font-size: 15px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #fff;
+    }
+    .panel-title-badge {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+    }
+
+    .alerts-list {
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-height: 520px;
+      overflow-y: auto;
+    }
+
+    .alerts-list::-webkit-scrollbar {
+      width: 6px;
+    }
+    .alerts-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .alerts-list::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+
+    .alert-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--warning);
+      border-radius: 10px;
+      padding: 12px 14px;
+      transition: transform 0.15s ease, background 0.15s ease;
+      position: relative;
+    }
+    .alert-card.high {
+      border-left-color: var(--danger);
+      background: rgba(239, 68, 68, 0.05);
+    }
+    .alert-card.critical {
+      border-left-color: #a855f7;
+      background: rgba(168, 85, 247, 0.06);
+    }
+
+    .alert-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .alert-type {
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .alert-severity {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+    }
+    .severity-medium { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+    .severity-high { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+    .severity-critical { background: rgba(168, 85, 247, 0.2); color: #c084fc; }
+
+    .alert-message {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.4;
+      margin-bottom: 8px;
+    }
+
+    .alert-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .snapshot-thumb {
+      width: 100%;
+      height: 100px;
+      object-fit: cover;
+      border-radius: 6px;
+      margin-top: 8px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+    }
+
+    .empty-state {
+      padding: 40px 20px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .modal-content {
+      max-width: 900px;
+      width: 100%;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    }
+    .modal-content img {
+      width: 100%;
+      display: block;
+    }
+    .modal-header {
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 20px;
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid var(--border);
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+      z-index: 99;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      backdrop-filter: blur(8px);
+    }
+    .toast.show { display: flex; animation: slideUp 0.3s ease; }
+    @keyframes slideUp {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* Restricted Zone Dedicated Section Styles */
+    .restricted-zone-card {
+      margin-top: 4px;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+    .restricted-zone-card.breached-glow {
+      border-color: rgba(239, 68, 68, 0.6);
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.25);
+    }
+    .rz-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .rz-title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .rz-icon-shield {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #10b981, #059669);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+      transition: all 0.3s ease;
+    }
+    .rz-icon-shield.breached {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      box-shadow: 0 0 20px rgba(239, 68, 68, 0.6);
+      animation: pulse 1s infinite;
+    }
+    .rz-icon-shield svg {
+      width: 22px;
+      height: 22px;
+      fill: none;
+      stroke: #fff;
+      stroke-width: 2;
+    }
+    .rz-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.01em;
+    }
+    .rz-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      font-family: var(--font-mono);
+    }
+    .rz-status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      transition: all 0.3s ease;
+    }
+    .rz-status-badge.status-secure {
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #10b981;
+    }
+    .rz-status-badge.status-breached {
+      background: rgba(239, 68, 68, 0.25);
+      border: 1px solid rgba(239, 68, 68, 0.6);
+      color: #f87171;
+      animation: pulse 1s infinite;
+    }
+    .rz-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .rz-status-badge.status-secure .rz-status-dot {
+      background: #10b981;
+      box-shadow: 0 0 6px #10b981;
+    }
+    .rz-status-badge.status-breached .rz-status-dot {
+      background: #ef4444;
+      box-shadow: 0 0 10px #ef4444;
+    }
+
+    /* Perimeter Corridor Visualizer */
+    .rz-corridor-wrapper {
+      margin: 16px 20px 14px;
+      height: 32px;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      border: 1px solid var(--border);
+      background: #080c14;
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+    }
+    .rz-corridor-safe {
+      flex: 80;
+      display: flex;
+      align-items: center;
+      padding-left: 14px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      background: rgba(59, 130, 246, 0.05);
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      font-weight: 500;
+    }
+    .rz-corridor-restricted {
+      flex: 20;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.15);
+      border-left: 2px dashed rgba(239, 68, 68, 0.5);
+      transition: all 0.3s ease;
+      letter-spacing: 0.05em;
+    }
+    .rz-corridor-restricted.active-breach {
+      background: repeating-linear-gradient(
+        45deg,
+        rgba(239, 68, 68, 0.45),
+        rgba(239, 68, 68, 0.45) 8px,
+        rgba(185, 28, 28, 0.6) 8px,
+        rgba(185, 28, 28, 0.6) 16px
+      );
+      color: #fff;
+      box-shadow: 0 0 16px rgba(239, 68, 68, 0.6);
+      animation: pulse 1s infinite;
+    }
+
+    .rz-body {
+      padding: 0 20px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .rz-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .rz-metric-box {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+    }
+    .rz-metric-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .rz-metric-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      font-family: var(--font-mono);
+      transition: color 0.2s ease;
+    }
+    .rz-metric-value.alerting {
+      color: var(--danger);
+      text-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+    }
+
+    .rz-incidents-container {
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .rz-incidents-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .rz-incidents-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #fff;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .rz-incidents-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 10px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+
+    /* Filter Tabs */
+    .filter-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+      background: rgba(0, 0, 0, 0.15);
+    }
+    .filter-tabs::-webkit-scrollbar {
+      height: 4px;
+    }
+    .filter-tabs::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+    }
+    .filter-tab {
+      padding: 5px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+      font-family: var(--font-sans);
+    }
+    .filter-tab:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+    }
+    .filter-tab.active {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+      box-shadow: 0 2px 8px var(--primary-glow);
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="shield-icon">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </div>
+      <div class="brand-text">
+        <h1>Dashboard 1: Weapon & Unauthorized-Object Monitor</h1>
+        <p>OPEN-AREA SURVEILLANCE // WEAPONS (KNIFE + GUN) & UNATTENDED OBJECTS</p>
+      </div>
+    </div>
+
+    <div class="header-status">
+      <a href="/restricted" class="btn" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35); text-decoration: none; padding: 6px 12px; font-size: 11px; display: inline-flex; align-items: center; gap: 6px;">
+        <svg style="width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2;" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        🛡️ Switch to Dashboard 2 (Restricted Area) &rarr;
+      </a>
+
+      <a href="/docs" target="_blank" class="btn" style="background: rgba(255, 255, 255, 0.05); color: var(--text-secondary); border: 1px solid var(--border); text-decoration: none; padding: 6px 12px; font-size: 11px; display: inline-flex; align-items: center; gap: 6px;">
+        📖 API Docs
+      </a>
+      <div class="status-pill">
+        <div id="statusDot" class="status-dot"></div>
+        <span id="statusText">OFFLINE</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Grid -->
+  <main>
+    <!-- Left Column: Video & Controls -->
+    <div class="video-section">
+      <!-- Video Player -->
+      <div class="video-feed-wrapper">
+        <!-- Live HUD Overlay -->
+        <div id="videoHud" class="video-hud" style="display: none;">
+          <div class="badge-live">
+            <div class="badge-live-dot"></div>
+            <span>LIVE FEED</span>
+          </div>
+        </div>
+
+        <div id="videoMetrics" class="video-metrics-overlay" style="display: none;">
+          <div>FPS: <span id="hudFps">0.0</span></div>
+          <div>OBJECTS: <span id="hudObjects">0</span></div>
+        </div>
+
+        <!-- MJPEG Image -->
+        <img id="videoFeedImg" alt="Live Surveillance Feed">
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="standby-overlay" style="display: none;">
+          <div class="spinner"></div>
+          <h2 class="standby-title" id="loadingTitle">Processing Video...</h2>
+          <p class="standby-desc" id="loadingDesc">Running YOLO object detection and threat analysis...</p>
+        </div>
+
+        <!-- Standby Placeholder -->
+        <div id="standbyOverlay" class="standby-overlay">
+          <div class="standby-icon">
+            <svg viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+          </div>
+          <h2 class="standby-title">General Surveillance Feed Ready</h2>
+          <p class="standby-desc">Upload a security video or start live webcam to monitor dangerous weapons (knives, guns) and unattended objects (with owner-association).</p>
+          
+          <div style="display: flex; gap: 12px; margin-top: 8px;">
+            <button class="btn btn-camera" onclick="startWebcam()">
+              <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              Start Live Camera
+            </button>
+            <button class="btn btn-primary" onclick="document.getElementById('videoFileInput').click()">
+              <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload Video
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controls Panel -->
+      <div class="glass-card controls-card">
+        <div class="file-input-wrapper">
+          <input type="file" id="videoFileInput" accept=".mp4,.avi,.mkv,.mov,.webm" onchange="handleFileUpload(event)">
+        </div>
+
+        <div class="btn-group">
+          <button class="btn btn-camera" onclick="startWebcam()">
+            <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+            Start Live Camera
+          </button>
+          <button class="btn btn-primary" onclick="document.getElementById('videoFileInput').click()">
+            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Upload Video File
+          </button>
+          <button class="btn btn-danger" onclick="stopStream()">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/></svg>
+            Stop
+          </button>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);">
+          Source: <span id="sourceLabel" style="color: var(--text-primary);">None</span>
+        </div>
+      </div>
+
+      <!-- Stats Bar -->
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Inference FPS</div>
+          <div id="statFps" class="stat-value">0.0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Objects in Frame</div>
+          <div id="statObjects" class="stat-value">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Total Alerts</div>
+          <div id="statAlerts" class="stat-value">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Surveillance Mode</div>
+          <div class="stat-value" style="font-size: 13px; color: #10b981;">General Cam</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Live Alerts Log -->
+    <div class="alerts-sidebar">
+      <div class="glass-card" style="height: 100%; display: flex; flex-direction: column;">
+        <div class="panel-header">
+          <div class="panel-title">
+            <svg style="width: 18px; height: 18px; stroke: var(--danger); fill: none; stroke-width: 2;" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>Real-Time Alerts</span>
+            <span id="alertCountBadge" class="panel-title-badge">0</span>
+          </div>
+
+          <button class="btn btn-secondary" style="padding: 6px 12px; font-size: 11px;" onclick="clearAlerts()">
+            Clear
+          </button>
+        </div>
+
+        <!-- Category Filter Tabs -->
+        <div class="filter-tabs">
+          <button class="filter-tab active" id="tabAll" onclick="setAlertFilter('all')">All (<span id="countFilterAll">0</span>)</button>
+          <button class="filter-tab" id="tabWeapon" onclick="setAlertFilter('weapon_detected')">🔪 Weapons (<span id="countFilterWeapons">0</span>)</button>
+          <button class="filter-tab" id="tabUnattended" onclick="setAlertFilter('unattended_object')">🎒 Unattended Items (<span id="countFilterUnattended">0</span>)</button>
+        </div>
+
+        <div id="alertsList" class="alerts-list">
+          <div class="empty-state">No security incidents detected yet.</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Snapshot Modal -->
+  <div id="snapshotModal" class="modal-backdrop" onclick="closeModal()">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span id="modalTitle" style="font-weight: 600; font-size: 14px;">Alert Snapshot</span>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <img id="modalImg" src="" alt="Alert Snapshot">
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast">
+    <span id="toastMsg">Notification</span>
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin;
+    let isRunning = false;
+    let pollInterval = null;
+
+    // Toast helper
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toastMsg').innerText = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3500);
+    }
+
+    // Modal helpers
+    function openModal(imgSrc, title) {
+      document.getElementById('modalImg').src = imgSrc;
+      document.getElementById('modalTitle').innerText = title || 'Alert Snapshot';
+      document.getElementById('snapshotModal').style.display = 'flex';
+    }
+    function closeModal() {
+      document.getElementById('snapshotModal').style.display = 'none';
+    }
+
+    // Start Webcam
+    async function startWebcam() {
+      showToast("Connecting to live camera...");
+      try {
+        const res = await fetch(`${API_BASE}/api/webcam?mode=main`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Failed to start camera");
+        showToast("Live camera started!");
+        setStreamingUi(true, "Webcam 0");
+      } catch (err) {
+        showToast("Camera error: " + err.message);
+      }
+    }
+
+    // Handle File Upload
+    async function handleFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const standby = document.getElementById('standbyOverlay');
+      const loading = document.getElementById('loadingOverlay');
+      const img = document.getElementById('videoFeedImg');
+      
+      standby.style.display = 'none';
+      img.style.display = 'none';
+      loading.style.display = 'flex';
+      document.getElementById('loadingTitle').innerText = 'Uploading Video...';
+      document.getElementById('loadingDesc').innerText = `Uploading ${file.name} to server...`;
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("mode", "main");
+
+      showToast(`Uploading ${file.name}...`);
+      try {
+        const res = await fetch(`${API_BASE}/api/upload`, {
+          method: "POST",
+          body: formData
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Upload failed");
+        
+        document.getElementById('loadingTitle').innerText = 'Starting AI Detection...';
+        document.getElementById('loadingDesc').innerText = 'Running YOLO tracking and zone checks...';
+        showToast("Video uploaded! Starting detection...");
+        isRunning = true;
+        setStreamingUi(true, file.name);
+      } catch (err) {
+        showToast("Upload error: " + err.message);
+        setStreamingUi(false);
+      } finally {
+        event.target.value = "";
+      }
+    }
+
+    // Stop Stream
+    async function stopStream() {
+      try {
+        await fetch(`${API_BASE}/api/stop`, { method: "POST" });
+        setStreamingUi(false);
+        showToast("Surveillance stopped");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    // Clear Alerts
+    async function clearAlerts() {
+      try {
+        await fetch(`${API_BASE}/api/alerts`, { method: "DELETE" });
+        fetchAlerts();
+        showToast("Alerts cleared");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    // UI state switcher
+    function setStreamingUi(active, sourceName = "") {
+      const img = document.getElementById('videoFeedImg');
+      const standby = document.getElementById('standbyOverlay');
+      const loading = document.getElementById('loadingOverlay');
+      const hud = document.getElementById('videoHud');
+      const metrics = document.getElementById('videoMetrics');
+      const statusDot = document.getElementById('statusDot');
+      const statusText = document.getElementById('statusText');
+      const sourceLabel = document.getElementById('sourceLabel');
+
+      if (active) {
+        standby.style.display = 'none';
+        loading.style.display = 'flex';
+        img.style.display = 'none';
+
+        const feedUrl = `${API_BASE}/api/video_feed?mode=main&t=${Date.now()}`;
+
+        img.onload = () => {
+          loading.style.display = 'none';
+          img.style.display = 'block';
+          hud.style.display = 'flex';
+          metrics.style.display = 'flex';
+        };
+
+        img.onerror = () => {
+          console.warn("Retrying video stream...");
+          setTimeout(() => {
+            if (isRunning) {
+              img.src = `${API_BASE}/api/video_feed?mode=main&t=${Date.now()}`;
+            }
+          }, 1000);
+        };
+
+        // If the first frame never arrives (slow pipeline warm-up), rebind the
+        // stream so the loading state can't hang on a stale connection.
+        setTimeout(() => {
+          if (isRunning && loading.style.display === 'flex') {
+            img.src = feedUrl;
+          }
+        }, 10000);
+
+        img.src = feedUrl;
+        statusDot.classList.add('active');
+        statusText.innerText = 'ONLINE';
+        if (sourceName) sourceLabel.innerText = sourceName;
+      } else {
+        img.onload = null;
+        img.onerror = null;
+        img.src = "";
+        img.style.display = 'none';
+        loading.style.display = 'none';
+        standby.style.display = 'flex';
+        hud.style.display = 'none';
+        metrics.style.display = 'none';
+        statusDot.classList.remove('active');
+        statusText.innerText = 'IDLE';
+        sourceLabel.innerText = 'None';
+      }
+    }
+
+    let currentAlertFilter = 'all';
+    let cachedAlerts = [];
+    let wasZoneBreached = false;
+
+    // Filter selector
+    function setAlertFilter(filter) {
+      currentAlertFilter = filter;
+      document.querySelectorAll('.filter-tab').forEach(tab => tab.classList.remove('active'));
+      const activeId = filter === 'all' ? 'tabAll' : 
+                       filter === 'weapon_detected' ? 'tabWeapon' : 'tabUnattended';
+      const activeTab = document.getElementById(activeId);
+      if (activeTab) activeTab.classList.add('active');
+      renderAlertsList();
+    }
+
+    // Poll System Status
+    async function fetchStatus() {
+      try {
+        const res = await fetch(`${API_BASE}/api/status?camera=main`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        document.getElementById('statFps').innerText = (data.fps || 0).toFixed(1);
+        document.getElementById('hudFps').innerText = (data.fps || 0).toFixed(1);
+        document.getElementById('statObjects').innerText = data.object_count || 0;
+        document.getElementById('hudObjects').innerText = data.object_count || 0;
+        document.getElementById('statAlerts').innerText = data.alert_count || 0;
+
+        if (data.is_running && !isRunning) {
+          isRunning = true;
+          setStreamingUi(true, data.video_source || "Active Stream");
+        } else if (!data.is_running && isRunning) {
+          isRunning = false;
+          setStreamingUi(false);
+        }
+      } catch (e) {
+        // backend might be temporarily offline
+      }
+    }
+
+    // Format human-friendly time
+    function formatTime(isoStr) {
+      try {
+        const d = new Date(isoStr);
+        return d.toLocaleTimeString();
+      } catch {
+        return isoStr;
+      }
+    }
+
+    // Render alerts list
+    function renderAlertsList() {
+      const alerts = cachedAlerts;
+      const badge = document.getElementById('alertCountBadge');
+      if (badge) badge.innerText = alerts.length;
+
+      const weaponAlerts = alerts.filter(a => a.alert_type === 'weapon_detected');
+      const unattendedAlerts = alerts.filter(a => a.alert_type === 'unattended_object');
+
+      // Update badge counters on filter tabs
+      const cAll = document.getElementById('countFilterAll');
+      const cWeap = document.getElementById('countFilterWeapons');
+      const cUnattended = document.getElementById('countFilterUnattended');
+      if (cAll) cAll.innerText = alerts.length;
+      if (cWeap) cWeap.innerText = weaponAlerts.length;
+      if (cUnattended) cUnattended.innerText = unattendedAlerts.length;
+
+      // Render Sidebar Alert Feed based on Active Filter
+      const list = document.getElementById('alertsList');
+      if (!list) return;
+
+      let filtered = alerts;
+      if (currentAlertFilter === 'weapon_detected') filtered = weaponAlerts;
+      else if (currentAlertFilter === 'unattended_object') filtered = unattendedAlerts;
+
+      if (filtered.length === 0) {
+        list.innerHTML = `<div class="empty-state">No incidents in this category.</div>`;
+        return;
+      }
+
+      list.innerHTML = filtered.map(alert => {
+        const sevClass = (alert.severity || 'medium').toLowerCase();
+        const snapUrl = alert.snapshot_url ? (alert.snapshot_url.startsWith('http') ? alert.snapshot_url : `${API_BASE}${alert.snapshot_url}`) : (alert.snapshot_path ? `${API_BASE}/api/snapshots/${alert.snapshot_path}` : null);
+        const snapshotHtml = snapUrl ? `
+          <img class="snapshot-thumb" src="${snapUrl}" 
+               onclick="openModal('${snapUrl}', '${alert.message}')" 
+               alt="Alert Snapshot">
+        ` : '';
+
+        return `
+          <div class="alert-card ${sevClass}">
+            <div class="alert-card-header">
+              <span class="alert-type">${(alert.alert_type || 'ALERT').toUpperCase().replace('_', ' ')}</span>
+              <span class="alert-severity severity-${sevClass}">${alert.severity}</span>
+            </div>
+            <div class="alert-message">${alert.message}</div>
+            <div class="alert-footer">
+              <span>⏱️ ${Math.round(alert.duration_seconds || 0)}s duration</span>
+              <span>${formatTime(alert.timestamp)}</span>
+            </div>
+            ${snapshotHtml}
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Poll Alerts
+    async function fetchAlerts() {
+      try {
+        const res = await fetch(`${API_BASE}/api/alerts?camera=main&limit=50`);
+        if (!res.ok) return;
+        const data = await res.json();
+        cachedAlerts = data.alerts || [];
+        renderAlertsList();
+      } catch (e) {
+        console.error("Alerts fetch error", e);
+      }
+    }
+
+    // Setup polling
+    setInterval(fetchStatus, 800);
+    setInterval(fetchAlerts, 1200);
+    fetchStatus();
+    fetchAlerts();
+  </script>
+</body>
+</html>

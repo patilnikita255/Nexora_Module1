@@ -30,6 +30,7 @@ class AlertManager:
         self.alerts: List[Alert] = []
         self.max_alerts = max_alerts
         self._last_trigger_by_key: Dict[Tuple[str, int], float] = {}
+        self._triggered_severities_by_key: Dict[Tuple[str, int], set] = {}
         self._settings = get_settings()
         self._cooldown_seconds = self._settings.alert_cooldown_seconds
         self._min_confirmed_frames = 4
@@ -38,6 +39,7 @@ class AlertManager:
             AlertType.INTRUSION: 2.5,
             AlertType.UNATTENDED_OBJECT: float(self._settings.unattended_object_seconds),
             AlertType.SUSPICIOUS_ACTIVITY: 1.0,
+            AlertType.WEAPON_DETECTED: 0.0,
         }
 
         # Ensure snapshots directory exists
@@ -50,14 +52,8 @@ class AlertManager:
         event_frame_counts: Optional[Dict[str, int]] = None,
     ) -> List[Alert]:
         """
-        Process behavior events and create alerts (with cooldown).
-
-        Args:
-            events: List of behavior events from the analyzer.
-            frame: Current video frame for snapshot.
-
-        Returns:
-            List of newly created alerts.
+        Process behavior events and create alerts.
+        Enforces: exactly ONE alert per priority/severity level for the same person/event.
         """
         new_alerts: List[Alert] = []
         now = time.time()
@@ -65,6 +61,7 @@ class AlertManager:
         for event in events:
             primary_object_id = self._resolve_primary_object_id(event)
             cooldown_key = (event.event_type.value, primary_object_id)
+            severity_str = event.severity.value.lower()
 
             confirmed_frames = event.frame_count
             if event_frame_counts is not None:
@@ -74,12 +71,19 @@ class AlertManager:
                 )
 
             min_duration = self._duration_thresholds.get(event.event_type, 0.0)
-            if confirmed_frames < self._min_confirmed_frames:
+            weapon_confirm_frames = self._settings.weapon_confirm_frames
+            required_frames = weapon_confirm_frames if event.event_type == AlertType.WEAPON_DETECTED else self._min_confirmed_frames
+            if confirmed_frames < required_frames:
                 continue
             if event.duration_seconds < min_duration:
                 continue
 
-            # Check cooldown
+            # Check: Only ONE alert per priority (severity) level for the same incident/person
+            already_sent = self._triggered_severities_by_key.setdefault(cooldown_key, set())
+            if severity_str in already_sent:
+                continue
+
+            # Check general cooldown
             last_time = self._last_trigger_by_key.get(cooldown_key, 0)
             if now - last_time < self._cooldown_seconds:
                 continue
@@ -99,6 +103,8 @@ class AlertManager:
                 snapshot_url=snapshot_url,
                 objects_involved=[str(oid) for oid in event.involved_objects],
                 object_id=str(primary_object_id) if primary_object_id >= 0 else None,
+                zone_id=getattr(event, "zone_id", None),
+                zone_name=getattr(event, "zone_name", None),
                 duration_seconds=round(event.duration_seconds, 1),
                 confidence=round(event.confidence, 3),
                 triple_lock={
@@ -111,6 +117,7 @@ class AlertManager:
             self.alerts.append(alert)
             new_alerts.append(alert)
             self._last_trigger_by_key[cooldown_key] = now
+            already_sent.add(severity_str)
 
             # FIFO eviction
             if len(self.alerts) > self.max_alerts:
@@ -132,15 +139,29 @@ class AlertManager:
 
         return new_alerts
 
-    def get_alerts(self, limit: int = 50) -> List[Alert]:
-        """Get latest alerts, most recent first."""
+    def get_alerts(
+        self,
+        limit: int = 50,
+        alert_types: Optional[Set[AlertType]] = None,
+    ) -> List[Alert]:
+        """Get latest alerts, most recent first, optionally filtered by alert_types."""
+        if alert_types:
+            filtered = [a for a in self.alerts if a.alert_type in alert_types]
+            return list(reversed(filtered[-limit:]))
         return list(reversed(self.alerts[-limit:]))
+
+    def get_alert_count(self, alert_types: Optional[Set[AlertType]] = None) -> int:
+        """Get alert count, optionally filtered by alert_types."""
+        if alert_types:
+            return sum(1 for a in self.alerts if a.alert_type in alert_types)
+        return len(self.alerts)
 
     def clear_alerts(self) -> int:
         """Clear all alerts. Returns count cleared."""
         count = len(self.alerts)
         self.alerts.clear()
         self._last_trigger_by_key.clear()
+        self._triggered_severities_by_key.clear()
         return count
 
     @staticmethod
@@ -166,3 +187,4 @@ class AlertManager:
     @property
     def alert_count(self) -> int:
         return len(self.alerts)
+

@@ -27,6 +27,21 @@ class AlertType(str, Enum):
     INTRUSION = "intrusion"
     UNATTENDED_OBJECT = "unattended_object"
     SUSPICIOUS_ACTIVITY = "suspicious_activity"
+    WEAPON_DETECTED = "weapon_detected"
+
+
+class ZoneType(str, Enum):
+    RESTRICTED = "restricted"
+    EXCLUDED = "excluded"
+    MONITORED = "monitored"
+
+
+class ZoneConfig(BaseModel):
+    id: str
+    name: str
+    zone_type: ZoneType = ZoneType.RESTRICTED
+    coords: Tuple[float, float, float, float] = (0.8, 0.0, 1.0, 1.0)
+    is_active: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +88,8 @@ class BehaviorEvent(BaseModel):
     message: str
     involved_objects: List[int] = Field(default_factory=list)
     zone: Optional[str] = None
+    zone_id: Optional[str] = None
+    zone_name: Optional[str] = None
     primary_object_id: Optional[int] = None
     duration_seconds: float = 0.0
     confidence: float = 0.0
@@ -89,6 +106,8 @@ class Alert(BaseModel):
     snapshot_url: Optional[str] = None
     objects_involved: List[str] = Field(default_factory=list)
     object_id: Optional[str] = None
+    zone_id: Optional[str] = None
+    zone_name: Optional[str] = None
     duration_seconds: float = 0.0
     confidence: float = 0.0
     triple_lock: dict = Field(default_factory=lambda: {
@@ -111,6 +130,10 @@ class SystemStatus(BaseModel):
     alert_count: int = 0
     uptime_seconds: float = 0.0
     video_source: Optional[str] = None
+    zone_breached: bool = False
+    active_intruders: int = 0
+    zone_coords: str = "0.8,0.0,1.0,1.0"
+    zones: List[ZoneConfig] = Field(default_factory=list)
 
 
 class StartRequest(BaseModel):
@@ -135,3 +158,10 @@ class ConfigResponse(BaseModel):
     intrusion_zone: Tuple[float, float, float, float]
     unattended_object_seconds: int
     alert_cooldown_seconds: int
+    zones: List[ZoneConfig] = Field(default_factory=list)
+
+
+class ZoneListResponse(BaseModel):
+    """List of configured surveillance zones."""
+    zones: List[ZoneConfig] = Field(default_factory=list)
+    total: int = 0
