@@ -6,6 +6,12 @@ Verifies:
   - Critical severity assignment
 """
 
+import sys
+from pathlib import Path
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
 import time
 from app.core.behavior import BehaviorAnalyzer
 from app.models.schemas import (

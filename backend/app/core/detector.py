@@ -40,10 +40,10 @@ SURVEILLANCE_CLASSES = {
 # Minimum allowed dimension for a gun detection box (filters tiny artifacts)
 GUN_MIN_DIMENSION = 14
 
-# Absurd boxes (whole frame / wall-sized) are always gun-model artifacts.
-GUN_ABSURD_HEIGHT_RATIO = 0.85
-GUN_ABSURD_WIDTH_RATIO = 0.85
-GUN_ABSURD_AREA_RATIO = 0.75
+# Absurd boxes (whole frame / person-sized) are gun-model artifacts.
+GUN_ABSURD_HEIGHT_RATIO = 0.40
+GUN_ABSURD_WIDTH_RATIO = 0.40
+GUN_ABSURD_AREA_RATIO = 0.15
 
 # Minimum overlap between weapon boxes to trigger reconciliation
 WEAPON_OVERLAP_IOU = 0.20
@@ -137,8 +137,8 @@ class ObjectDetector:
                     continue
 
                 conf = float(box.conf[0])
-                # Knife confidence threshold >= 0.28
-                if cls_id == 43 and conf < 0.28:
+                # Knife confidence threshold >= 0.35
+                if cls_id == 43 and conf < 0.35:
                     continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
@@ -216,37 +216,61 @@ class ObjectDetector:
     ) -> bool:
         """
         Discard absurd gun-model artifacts while keeping genuine handguns and long guns.
+        Crucially:
+          1. Rejects whole-body false positives (when gun model mistakes a person for a gun).
+          2. When persons are present, the weapon must have physical proximity (< 220px or overlapping).
+          3. Rejects frame-sized or wall-sized boxes.
         """
         if frame_w <= 0 or frame_h <= 0:
             return True
 
         bw = x2 - x1
         bh = y2 - y1
+        gun_area = max(1, bw * bh)
+
         if bh / frame_h > GUN_ABSURD_HEIGHT_RATIO:
             return False
         if bw / frame_w > GUN_ABSURD_WIDTH_RATIO:
             return False
-        if (bw * bh) / (frame_w * frame_h) > GUN_ABSURD_AREA_RATIO:
+        if (gun_area / (frame_w * frame_h)) > GUN_ABSURD_AREA_RATIO:
             return False
 
-        # If a weapon box is unusually large (> 35% of frame dimensions),
-        # verify it overlaps or is near a person to avoid whole-background false positives.
-        if (bh / frame_h > 0.35) or (bw / frame_w > 0.35):
-            gun_area = max(1, bw * bh)
-            has_person_support = False
+        if persons:
+            has_person_proximity = False
             for p in persons:
-                inter_w = max(0, min(x2, p.bbox.x2) - max(x1, p.bbox.x1))
-                inter_h = max(0, min(y2, p.bbox.y2) - max(y1, p.bbox.y1))
-                inter_area = inter_w * inter_h
-                overlap_ratio = inter_area / gun_area
+                px1, py1, px2, py2 = p.bbox.x1, p.bbox.y1, p.bbox.x2, p.bbox.y2
+                pw = max(1, px2 - px1)
+                ph = max(1, py2 - py1)
+                p_area = max(1, pw * ph)
+
+                ix1 = max(x1, px1)
+                iy1 = max(y1, py1)
+                ix2 = min(x2, px2)
+                iy2 = min(y2, py2)
+                iw = max(0, ix2 - ix1)
+                ih = max(0, iy2 - iy1)
+                inter = iw * ih
+                union = gun_area + p_area - inter
+                iou = inter / union if union > 0 else 0.0
+
+                # Reject if the gun box is actually the whole person's body
+                if iou > 0.35:
+                    return False
+                if inter > 0 and (gun_area / p_area > 0.40):
+                    return False
+                if inter > 0 and (bh / ph > 0.55):
+                    return False
+
+                # Proximity check
                 dist = (
                     ((x1 + x2) / 2 - p.center_x) ** 2
                     + ((y1 + y2) / 2 - p.center_y) ** 2
                 ) ** 0.5
-                if overlap_ratio >= 0.10 or dist < 250:
-                    has_person_support = True
-                    break
-            return has_person_support
+                if inter > 0 or dist < 220:
+                    has_person_proximity = True
+
+            if not has_person_proximity:
+                return False
 
         return True
 

@@ -41,8 +41,8 @@ class Settings(BaseSettings):
     unattended_object_seconds: int = 15
     alert_cooldown_seconds: int = 60
     enable_firearm_model: bool = True
-    gun_confidence: float = 0.28
-    weapon_confirm_frames: int = 2
+    gun_confidence: float = 0.38
+    weapon_confirm_frames: int = 3
 
     # CORS
     frontend_url: str = "http://localhost:8080"
