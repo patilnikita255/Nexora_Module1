@@ -71,31 +71,39 @@ def draw_frame_overlay(
         color = CLASS_COLORS.get(obj.class_name, DEFAULT_COLOR)
         bbox = obj.bbox
 
+        x1 = max(0, min(w - 1, bbox.x1))
+        y1 = max(0, min(h - 1, bbox.y1))
+        x2 = max(0, min(w - 1, bbox.x2))
+        y2 = max(0, min(h - 1, bbox.y2))
+
         # Bounding box
-        cv2.rectangle(frame, (bbox.x1, bbox.y1), (bbox.x2, bbox.y2), color, 2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
         # Label background
         label = f"ID:{obj.track_id} {obj.class_name} {obj.confidence:.0%}"
         label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        bg_y1 = max(0, y1 - label_size[1] - 8)
         cv2.rectangle(
             frame,
-            (bbox.x1, bbox.y1 - label_size[1] - 10),
-            (bbox.x1 + label_size[0] + 4, bbox.y1),
+            (x1, bg_y1),
+            (min(w - 1, x1 + label_size[0] + 4), y1),
             color,
             -1,
         )
+        text_y = max(label_size[1] + 2, y1 - 4)
         cv2.putText(
             frame, label,
-            (bbox.x1 + 2, bbox.y1 - 5),
+            (x1 + 2, text_y),
             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1,
         )
 
         # Duration tag (if > 3 seconds)
         if obj.duration_seconds > 3:
             dur_label = f"{obj.duration_seconds:.0f}s"
+            dur_y = min(h - 5, y2 + 18)
             cv2.putText(
                 frame, dur_label,
-                (bbox.x1, bbox.y2 + 18),
+                (x1, dur_y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
             )
 

@@ -127,82 +127,84 @@ class BehaviorAnalyzer:
         weapon_ids = {w.track_id for w in weapons}
         self._cleanup_missing_tracks(person_ids, bag_ids, weapon_ids)
 
-        # =====================================================================
-        # Feature 1 — Multi-Zone Restricted-Area Intrusion
-        # =====================================================================
         active_restricted = [z for z in self.zones if z.zone_type == ZoneType.RESTRICTED and z.is_active]
         active_excluded = [z for z in self.zones if z.zone_type == ZoneType.EXCLUDED and z.is_active]
 
-        # 1. Identify persons located in EXCLUDED zones (e.g. public seating/waiting areas)
-        excluded_person_ids: Set[int] = set()
-        for person in persons:
-            for ex_zone in active_excluded:
-                pz = self._get_zone_pixel_box(ex_zone.coords, frame_width, frame_height)
-                if self._point_in_zone(person.center_x, person.bbox.y2, pz) or self._point_in_zone(person.center_x, person.center_y, pz):
-                    excluded_person_ids.add(person.track_id)
-                    break
+        # =====================================================================
+        # Feature 1 — Multi-Zone Restricted-Area Intrusion
+        # (Active on Restricted Camera / Dashboard 2, skipped on General Monitor)
+        # =====================================================================
+        if camera_mode not in ("main", "general", "open_area"):
+            # 1. Identify persons located in EXCLUDED zones (e.g. public seating/waiting areas)
+            excluded_person_ids: Set[int] = set()
+            for person in persons:
+                for ex_zone in active_excluded:
+                    pz = self._get_zone_pixel_box(ex_zone.coords, frame_width, frame_height)
+                    if self._point_in_zone(person.center_x, person.bbox.y2, pz) or self._point_in_zone(person.center_x, person.center_y, pz):
+                        excluded_person_ids.add(person.track_id)
+                        break
 
-        # 2. Check RESTRICTED zones for persons not in excluded zones
-        for person in persons:
-            pid = person.track_id
-            if pid in excluded_person_ids:
-                # In authorized excluded area -> clear intrusion timers
-                for rz in active_restricted:
-                    self._zone_entry_time.pop((pid, rz.id), None)
-                    self._zone_persistence.pop((pid, rz.id), None)
-                self._intrusion_entry_time.pop(pid, None)
-                self._intrusion_persistence.pop(pid, None)
-                continue
+            # 2. Check RESTRICTED zones for persons not in excluded zones
+            for person in persons:
+                pid = person.track_id
+                if pid in excluded_person_ids:
+                    # In authorized excluded area -> clear intrusion timers
+                    for rz in active_restricted:
+                        self._zone_entry_time.pop((pid, rz.id), None)
+                        self._zone_persistence.pop((pid, rz.id), None)
+                    self._intrusion_entry_time.pop(pid, None)
+                    self._intrusion_persistence.pop(pid, None)
+                    continue
 
-            for zone in active_restricted:
-                pz = self._get_zone_pixel_box(zone.coords, frame_width, frame_height)
-                in_zone = self._point_in_zone(person.center_x, person.bbox.y2, pz) or self._point_in_zone(person.center_x, person.center_y, pz)
+                for zone in active_restricted:
+                    pz = self._get_zone_pixel_box(zone.coords, frame_width, frame_height)
+                    in_zone = self._point_in_zone(person.center_x, person.bbox.y2, pz) or self._point_in_zone(person.center_x, person.center_y, pz)
 
-                key = (pid, zone.id)
-                if in_zone:
-                    if pid in self._intrusion_entry_time and key not in self._zone_entry_time:
-                        self._zone_entry_time[key] = self._intrusion_entry_time[pid]
+                    key = (pid, zone.id)
+                    if in_zone:
+                        if pid in self._intrusion_entry_time and key not in self._zone_entry_time:
+                            self._zone_entry_time[key] = self._intrusion_entry_time[pid]
 
-                    entry_time = self._zone_entry_time.setdefault(key, now)
-                    self._intrusion_entry_time[pid] = entry_time
-                    dwell = now - entry_time
+                        entry_time = self._zone_entry_time.setdefault(key, now)
+                        self._intrusion_entry_time[pid] = entry_time
+                        dwell = now - entry_time
 
-                    if dwell < self.intrusion_delay_seconds:
-                        continue
+                        if dwell < self.intrusion_delay_seconds:
+                            continue
 
-                    count = self._zone_persistence.get(key, 0) + 1
-                    self._zone_persistence[key] = count
-                    self._intrusion_persistence[pid] = count
+                        count = self._zone_persistence.get(key, 0) + 1
+                        self._zone_persistence[key] = count
+                        self._intrusion_persistence[pid] = count
 
-                    # Escalating severity with dwell time
-                    if dwell < 6.0:
-                        severity = AlertSeverity.MEDIUM
-                    elif dwell < 12.0:
-                        severity = AlertSeverity.HIGH
-                    else:
-                        severity = AlertSeverity.CRITICAL
+                        # Escalating severity with dwell time
+                        if dwell < 6.0:
+                            severity = AlertSeverity.MEDIUM
+                        elif dwell < 12.0:
+                            severity = AlertSeverity.HIGH
+                        else:
+                            severity = AlertSeverity.CRITICAL
 
-                    events.append(
-                        BehaviorEvent(
-                            event_type=AlertType.INTRUSION,
-                            severity=severity,
-                            message=(
-                                f"Person (ID:{pid}) breached restricted zone "
-                                f"'{zone.name}' for {dwell:.0f}s"
-                            ),
-                            involved_objects=[pid],
-                            primary_object_id=pid,
-                            duration_seconds=round(dwell, 1),
-                            confidence=person.confidence,
-                            frame_count=count,
-                            zone=zone.id,
-                            zone_id=zone.id,
-                            zone_name=zone.name,
+                        events.append(
+                            BehaviorEvent(
+                                event_type=AlertType.INTRUSION,
+                                severity=severity,
+                                message=(
+                                    f"Person (ID:{pid}) breached restricted zone "
+                                    f"'{zone.name}' for {dwell:.0f}s"
+                                ),
+                                involved_objects=[pid],
+                                primary_object_id=pid,
+                                duration_seconds=round(dwell, 1),
+                                confidence=person.confidence,
+                                frame_count=count,
+                                zone=zone.id,
+                                zone_id=zone.id,
+                                zone_name=zone.name,
+                            )
                         )
-                    )
-                else:
-                    self._zone_entry_time.pop(key, None)
-                    self._zone_persistence.pop(key, None)
+                    else:
+                        self._zone_entry_time.pop(key, None)
+                        self._zone_persistence.pop(key, None)
 
         # =====================================================================
         # Feature 2 — Weapon Detection (Knife + Gun, FOV-wide)
@@ -222,7 +224,7 @@ class BehaviorAnalyzer:
                     min_dist = dist
                     nearest_person_id = person.track_id
 
-            if nearest_person_id is not None and min_dist < 220.0:
+            if nearest_person_id is not None and min_dist < 380.0:
                 primary_id = nearest_person_id
                 involved = [wid, nearest_person_id]
                 msg = (

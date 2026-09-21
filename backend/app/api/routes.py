@@ -17,8 +17,10 @@ Endpoints:
 from __future__ import annotations
 
 import os
+import time
 from typing import Optional
 
+import cv2
 from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Form
 from fastapi.responses import StreamingResponse, FileResponse
 
@@ -60,28 +62,57 @@ async def upload_video(
             detail=f"Invalid file type '{ext}'. Allowed: {', '.join(allowed_extensions)}",
         )
 
-    # Save uploaded file
+    # Save uploaded file with timestamp to prevent overwriting active playing files
     os.makedirs(settings.uploads_dir, exist_ok=True)
-    file_path = os.path.join(settings.uploads_dir, file.filename)
+    safe_filename = os.path.basename(file.filename or "uploaded_video.mp4")
+    name_part, ext_part = os.path.splitext(safe_filename)
+    timestamp_tag = int(time.time() * 1000)
+    storage_filename = f"{name_part}_{timestamp_tag}{ext_part}"
+    file_path = os.path.join(settings.uploads_dir, storage_filename)
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is empty.",
+        )
 
     with open(file_path, "wb") as f:
-        content = await file.read()
         f.write(content)
+        f.flush()
 
     file_size_mb = len(content) / (1024 * 1024)
-    print(f"[Upload] Saved: {file.filename} ({file_size_mb:.1f} MB) [Mode: {mode}]")
+    print(f"[Upload] Saved: {storage_filename} ({file_size_mb:.1f} MB) [Original: {safe_filename}] [Mode: {mode}]")
 
-    # Start processing in background thread — does NOT block this response
+    # Validate that OpenCV can actually open and read this video before disrupting current feed
+    test_cap = cv2.VideoCapture(file_path)
+    can_open = test_cap.isOpened()
+    can_read = False
+    if can_open:
+        can_read, _ = test_cap.read()
+    test_cap.release()
+
+    if not can_open or not can_read:
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file could not be decoded as a valid video. Please ensure it is a valid video file (e.g. MP4/H.264).",
+        )
+
+    # Start processing in background thread
     success = processor.start(file_path, mode=mode)
     if not success:
         raise HTTPException(
             status_code=500,
-            detail="Failed to open the uploaded video file. Is it a valid video?",
+            detail="Failed to launch video processing pipeline.",
         )
 
     return {
         "message": "Video uploaded and processing started",
-        "filename": file.filename,
+        "filename": safe_filename,
         "mode": mode,
         "size_mb": round(file_size_mb, 2),
     }

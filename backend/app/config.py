@@ -27,7 +27,8 @@ class Settings(BaseSettings):
 
     # YOLO
     yolo_model: str = "weights/yolov8n.pt"
-    yolo_confidence: float = 0.5
+    yolo_confidence: float = 0.35
+    knife_confidence: float = 0.20
     device: str = "auto"  # auto | cuda | cpu | mps
 
     # Server
@@ -41,8 +42,8 @@ class Settings(BaseSettings):
     unattended_object_seconds: int = 15
     alert_cooldown_seconds: int = 60
     enable_firearm_model: bool = True
-    gun_confidence: float = 0.38
-    weapon_confirm_frames: int = 3
+    gun_confidence: float = 0.20
+    weapon_confirm_frames: int = 1
 
     # CORS
     frontend_url: str = "http://localhost:8080"

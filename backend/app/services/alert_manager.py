@@ -60,7 +60,13 @@ class AlertManager:
 
         for event in events:
             primary_object_id = self._resolve_primary_object_id(event)
-            cooldown_key = (event.event_type.value, primary_object_id)
+            if event.event_type == AlertType.INTRUSION:
+                zone_key = getattr(event, "zone_id", None) or "default_zone"
+                cooldown_key = (event.event_type.value, zone_key)
+            elif event.event_type == AlertType.WEAPON_DETECTED:
+                cooldown_key = (event.event_type.value, "weapon_threat")
+            else:
+                cooldown_key = (event.event_type.value, primary_object_id)
             severity_str = event.severity.value.lower()
 
             confirmed_frames = event.frame_count
@@ -83,15 +89,14 @@ class AlertManager:
                 continue
 
             # Anti-duplication check:
+            # Sends EXACTLY ONCE for each critical/severity level (MEDIUM, HIGH, CRITICAL) per incident
             last_time = self._last_trigger_by_key.get(cooldown_key, 0)
             already_sent = self._triggered_severities_by_key.setdefault(cooldown_key, set())
-            if now - last_time < self._cooldown_seconds:
-                # Within cooldown window: do not repeat same severity level
-                if severity_str in already_sent:
+            if severity_str in already_sent:
+                if now - last_time > self._cooldown_seconds:
+                    already_sent.clear()
+                else:
                     continue
-            else:
-                # Cooldown window expired: reset severity set for fresh incident
-                already_sent.clear()
 
             # Save snapshot
             snapshot_url = None
@@ -168,6 +173,11 @@ class AlertManager:
         self._last_trigger_by_key.clear()
         self._triggered_severities_by_key.clear()
         return count
+
+    def reset_cooldowns(self) -> None:
+        """Reset deduplication cooldowns (e.g. on video restart/loop)."""
+        self._last_trigger_by_key.clear()
+        self._triggered_severities_by_key.clear()
 
     @staticmethod
     def _resolve_primary_object_id(event: BehaviorEvent) -> int:

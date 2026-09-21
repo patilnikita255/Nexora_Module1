@@ -67,6 +67,7 @@ class ObjectDetector:
             raise
 
         self.confidence_threshold = settings.yolo_confidence
+        self.knife_confidence = getattr(settings, "knife_confidence", 0.22)
         self.gun_confidence = settings.gun_confidence
 
         # 2. Fine-tuned lightweight gun model (runs on each processed frame)
@@ -119,9 +120,10 @@ class ObjectDetector:
 
         # 1. Base model detection (Person, Bags, Knife)
         # Using imgsz=640 for lightweight, quadratic CPU speedup
+        base_query_conf = min(self.confidence_threshold, self.knife_confidence)
         results = self.model(
             frame,
-            conf=self.confidence_threshold,
+            conf=base_query_conf,
             imgsz=640,
             device=self.device,
             verbose=False,
@@ -137,9 +139,13 @@ class ObjectDetector:
                     continue
 
                 conf = float(box.conf[0])
-                # Knife confidence threshold >= 0.35
-                if cls_id == 43 and conf < 0.35:
-                    continue
+                # Separate thresholds: Knife vs general surveillance classes
+                if cls_id == 43:
+                    if conf < self.knife_confidence:
+                        continue
+                else:
+                    if conf < self.confidence_threshold:
+                        continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
                 cx = (x1 + x2) // 2
@@ -177,7 +183,7 @@ class ObjectDetector:
                     bw = x2 - x1
                     bh = y2 - y1
                     # Ignore tiny artifacts
-                    if bw < GUN_MIN_DIMENSION or bh < GUN_MIN_DIMENSION:
+                    if bw < 10 or bh < 10:
                         continue
                     frame_h, frame_w = frame.shape[:2]
                     if not self._gun_box_is_plausible(
@@ -215,61 +221,47 @@ class ObjectDetector:
         persons: List[Detection],
     ) -> bool:
         """
-        Discard absurd gun-model artifacts while keeping genuine handguns and long guns.
+        Discard gun-model artifacts while keeping genuine handguns and long guns.
         Crucially:
           1. Rejects whole-body false positives (when gun model mistakes a person for a gun).
-          2. When persons are present, the weapon must have physical proximity (< 220px or overlapping).
-          3. Rejects frame-sized or wall-sized boxes.
+          2. Rejects extreme frame-filling artifacts (> 85% width AND height).
+          3. Ignores tiny specks (< 10px).
+          4. Allows weapons whether held, close to camera, or in surveillance FOV.
         """
         if frame_w <= 0 or frame_h <= 0:
             return True
 
         bw = x2 - x1
         bh = y2 - y1
+
+        if bw < 10 or bh < 10:
+            return False
+
+        # Reject boxes that cover virtually the entire camera frame
+        if bw > 0.85 * frame_w and bh > 0.85 * frame_h:
+            return False
+
         gun_area = max(1, bw * bh)
 
-        if bh / frame_h > GUN_ABSURD_HEIGHT_RATIO:
-            return False
-        if bw / frame_w > GUN_ABSURD_WIDTH_RATIO:
-            return False
-        if (gun_area / (frame_w * frame_h)) > GUN_ABSURD_AREA_RATIO:
-            return False
+        # Check against detected persons: reject only if the gun box is actually the whole person
+        for p in persons:
+            px1, py1, px2, py2 = p.bbox.x1, p.bbox.y1, p.bbox.x2, p.bbox.y2
+            pw = max(1, px2 - px1)
+            ph = max(1, py2 - py1)
+            p_area = max(1, pw * ph)
 
-        if persons:
-            has_person_proximity = False
-            for p in persons:
-                px1, py1, px2, py2 = p.bbox.x1, p.bbox.y1, p.bbox.x2, p.bbox.y2
-                pw = max(1, px2 - px1)
-                ph = max(1, py2 - py1)
-                p_area = max(1, pw * ph)
+            ix1 = max(x1, px1)
+            iy1 = max(y1, py1)
+            ix2 = min(x2, px2)
+            iy2 = min(y2, py2)
+            iw = max(0, ix2 - ix1)
+            ih = max(0, iy2 - iy1)
+            inter = iw * ih
+            union = gun_area + p_area - inter
+            iou = inter / union if union > 0 else 0.0
 
-                ix1 = max(x1, px1)
-                iy1 = max(y1, py1)
-                ix2 = min(x2, px2)
-                iy2 = min(y2, py2)
-                iw = max(0, ix2 - ix1)
-                ih = max(0, iy2 - iy1)
-                inter = iw * ih
-                union = gun_area + p_area - inter
-                iou = inter / union if union > 0 else 0.0
-
-                # Reject if the gun box is actually the whole person's body
-                if iou > 0.35:
-                    return False
-                if inter > 0 and (gun_area / p_area > 0.40):
-                    return False
-                if inter > 0 and (bh / ph > 0.55):
-                    return False
-
-                # Proximity check
-                dist = (
-                    ((x1 + x2) / 2 - p.center_x) ** 2
-                    + ((y1 + y2) / 2 - p.center_y) ** 2
-                ) ** 0.5
-                if inter > 0 or dist < 220:
-                    has_person_proximity = True
-
-            if not has_person_proximity:
+            # Reject if the gun box is essentially the person's entire body
+            if iou > 0.65 or (inter > 0.80 * p_area and inter > 0.60 * gun_area):
                 return False
 
         return True

@@ -826,6 +826,7 @@
   <script>
     const API_BASE = window.location.origin;
     let isStreaming = false;
+    let streamGracePeriodUntil = 0;
 
     function openModal(src, title) {
       document.getElementById('modalImg').src = src;
@@ -837,11 +838,14 @@
     }
 
     async function startWebcam() {
+      streamGracePeriodUntil = Date.now() + 5000;
       try {
         const res = await fetch(`${API_BASE}/api/webcam?mode=restricted`, { method: "POST" });
         if (!res.ok) throw new Error("Failed to start live camera");
+        isStreaming = true;
         setStreamState(true, "Webcam 0");
       } catch (err) {
+        streamGracePeriodUntil = 0;
         alert(err.message);
       }
     }
@@ -850,15 +854,23 @@
       const file = e.target && e.target.files ? e.target.files[0] : (e.dataTransfer ? e.dataTransfer.files[0] : null);
       if (!file) return;
 
+      if (file.size === 0) {
+        alert("Selected file is empty.");
+        if (e.target && e.target.value !== undefined) e.target.value = "";
+        return;
+      }
+
       const standby = document.getElementById('standbyState');
       const loading = document.getElementById('loadingOverlay');
       const img = document.getElementById('videoFeedImg');
 
       standby.style.display = 'none';
-      img.style.display = 'none';
+      img.style.display = 'block';
       loading.style.display = 'flex';
       document.getElementById('loadingTitle').innerText = 'Uploading Perimeter Video...';
       document.getElementById('loadingDesc').innerText = `Uploading ${file.name} to Restricted Area Cam...`;
+
+      streamGracePeriodUntil = Date.now() + 8000;
 
       const fd = new FormData();
       fd.append("file", file);
@@ -866,8 +878,11 @@
       try {
         const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: fd });
         if (!res.ok) throw new Error("Failed to upload video");
+        isStreaming = true;
+        streamGracePeriodUntil = Date.now() + 5000;
         setStreamState(true, file.name);
       } catch (err) {
+        streamGracePeriodUntil = 0;
         alert("Upload error: " + err.message);
         setStreamState(false);
       } finally {
@@ -876,6 +891,7 @@
     }
 
     async function stopStream() {
+      streamGracePeriodUntil = 0;
       try {
         await fetch(`${API_BASE}/api/stop`, { method: "POST" });
         setStreamState(false);
@@ -900,15 +916,21 @@
       const sourceLabel = document.getElementById('sourceLabel');
       if (active) {
         standby.style.display = 'none';
-        img.style.display = 'none';
+        img.style.display = 'block';
         loading.style.display = 'flex';
 
         const feedUrl = `${API_BASE}/api/video_feed?mode=restricted&t=${Date.now()}`;
 
         img.onload = () => {
           loading.style.display = 'none';
-          img.style.display = 'block';
         };
+
+        // Fallback dismissal for browsers where multipart doesn't fire onload
+        setTimeout(() => {
+          if (isStreaming) {
+            loading.style.display = 'none';
+          }
+        }, 1200);
 
         img.onerror = () => {
           console.warn("Retrying restricted video stream...");
@@ -918,14 +940,6 @@
             }
           }, 1000);
         };
-
-        // If the first frame never arrives (slow pipeline warm-up), rebind the
-        // stream so the loading state can't hang on a stale connection.
-        setTimeout(() => {
-          if (isStreaming && loading.style.display === 'flex') {
-            img.src = feedUrl;
-          }
-        }, 10000);
 
         img.src = feedUrl;
         sourceLabel.innerText = source || "Active Stream";
@@ -998,10 +1012,20 @@
           if (corridorBar) corridorBar.classList.remove('active-breach');
         }
 
-        if (data.is_running && !isStreaming) {
-          setStreamState(true, data.video_source || "Active Stream");
+        if (data.is_running) {
+          if (data.fps > 0 || data.frame_count > 0) {
+            const loading = document.getElementById('loadingOverlay');
+            if (loading && loading.style.display !== 'none') {
+              loading.style.display = 'none';
+            }
+          }
+          if (!isStreaming) {
+            setStreamState(true, data.video_source || "Active Stream");
+          }
         } else if (!data.is_running && isStreaming) {
-          setStreamState(false);
+          if (Date.now() > streamGracePeriodUntil) {
+            setStreamState(false);
+          }
         }
       } catch (err) {}
     }

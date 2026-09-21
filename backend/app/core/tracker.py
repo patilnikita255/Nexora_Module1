@@ -106,10 +106,15 @@ class SimpleTracker:
         for row, obj_id in enumerate(obj_ids):
             obj_class = self.class_names.get(obj_id)
             for col, det in enumerate(detections):
-                if obj_class != det.class_name:
+                is_weapon_match = (
+                    obj_class in ("gun", "knife", "weapon")
+                    and det.class_name in ("gun", "knife", "weapon")
+                )
+                if obj_class != det.class_name and not is_weapon_match:
                     continue
                 distance = dist_matrix[row, col]
-                if distance <= self.max_distance:
+                max_dist = self.max_distance * 1.5 if is_weapon_match else self.max_distance
+                if distance <= max_dist:
                     candidate_pairs.append((distance, row, col))
 
         candidate_pairs.sort(key=lambda x: x[0])

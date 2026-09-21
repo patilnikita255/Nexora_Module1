@@ -1025,6 +1025,7 @@
     const API_BASE = window.location.origin;
     let isRunning = false;
     let pollInterval = null;
+    let streamGracePeriodUntil = 0;
 
     // Toast helper
     function showToast(msg) {
@@ -1047,13 +1048,16 @@
     // Start Webcam
     async function startWebcam() {
       showToast("Connecting to live camera...");
+      streamGracePeriodUntil = Date.now() + 5000;
       try {
         const res = await fetch(`${API_BASE}/api/webcam?mode=main`, { method: "POST" });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Failed to start camera");
         showToast("Live camera started!");
+        isRunning = true;
         setStreamingUi(true, "Webcam 0");
       } catch (err) {
+        streamGracePeriodUntil = 0;
         showToast("Camera error: " + err.message);
       }
     }
@@ -1063,15 +1067,24 @@
       const file = event.target.files[0];
       if (!file) return;
 
+      if (file.size === 0) {
+        showToast("Selected file is empty.");
+        event.target.value = "";
+        return;
+      }
+
       const standby = document.getElementById('standbyOverlay');
       const loading = document.getElementById('loadingOverlay');
       const img = document.getElementById('videoFeedImg');
       
       standby.style.display = 'none';
-      img.style.display = 'none';
+      img.style.display = 'block';
       loading.style.display = 'flex';
       document.getElementById('loadingTitle').innerText = 'Uploading Video...';
       document.getElementById('loadingDesc').innerText = `Uploading ${file.name} to server...`;
+
+      // Set grace period to prevent poll loop from resetting stream during upload/startup
+      streamGracePeriodUntil = Date.now() + 8000;
 
       const formData = new FormData();
       formData.append("file", file);
@@ -1087,11 +1100,13 @@
         if (!res.ok) throw new Error(data.detail || "Upload failed");
         
         document.getElementById('loadingTitle').innerText = 'Starting AI Detection...';
-        document.getElementById('loadingDesc').innerText = 'Running YOLO tracking and zone checks...';
+        document.getElementById('loadingDesc').innerText = 'Running YOLO tracking and threat analysis...';
         showToast("Video uploaded! Starting detection...");
         isRunning = true;
+        streamGracePeriodUntil = Date.now() + 5000;
         setStreamingUi(true, file.name);
       } catch (err) {
+        streamGracePeriodUntil = 0;
         showToast("Upload error: " + err.message);
         setStreamingUi(false);
       } finally {
@@ -1101,6 +1116,7 @@
 
     // Stop Stream
     async function stopStream() {
+      streamGracePeriodUntil = 0;
       try {
         await fetch(`${API_BASE}/api/stop`, { method: "POST" });
         setStreamingUi(false);
@@ -1134,17 +1150,23 @@
 
       if (active) {
         standby.style.display = 'none';
-        loading.style.display = 'flex';
-        img.style.display = 'none';
+        // Display image container immediately so MJPEG frames render without waiting for onload
+        img.style.display = 'block';
+        hud.style.display = 'flex';
+        metrics.style.display = 'flex';
 
         const feedUrl = `${API_BASE}/api/video_feed?mode=main&t=${Date.now()}`;
 
         img.onload = () => {
           loading.style.display = 'none';
-          img.style.display = 'block';
-          hud.style.display = 'flex';
-          metrics.style.display = 'flex';
         };
+
+        // Fallback dismissal: in Chromium, multipart/x-mixed-replace doesn't always fire onload
+        setTimeout(() => {
+          if (isRunning) {
+            loading.style.display = 'none';
+          }
+        }, 1200);
 
         img.onerror = () => {
           console.warn("Retrying video stream...");
@@ -1154,14 +1176,6 @@
             }
           }, 1000);
         };
-
-        // If the first frame never arrives (slow pipeline warm-up), rebind the
-        // stream so the loading state can't hang on a stale connection.
-        setTimeout(() => {
-          if (isRunning && loading.style.display === 'flex') {
-            img.src = feedUrl;
-          }
-        }, 10000);
 
         img.src = feedUrl;
         statusDot.classList.add('active');
@@ -1241,13 +1255,29 @@
         document.getElementById('hudObjects').innerText = data.object_count || 0;
         document.getElementById('statAlerts').innerText = data.alert_count || 0;
 
-        if (data.is_running && !isRunning) {
-          isRunning = true;
-          setStreamingUi(true, data.video_source || "Active Stream");
+        if (data.is_running) {
+          // If frames are being processed, ensure loading overlay is dismissed
+          if (data.fps > 0 || data.frame_count > 0) {
+            const loading = document.getElementById('loadingOverlay');
+            if (loading && loading.style.display !== 'none') {
+              loading.style.display = 'none';
+            }
+          }
+          if (!isRunning) {
+            isRunning = true;
+            setStreamingUi(true, data.video_source || "Active Stream");
+          }
         } else if (!data.is_running && isRunning) {
-          isRunning = false;
-          setStreamingUi(false);
+          // Only stop stream if not currently in an upload/startup grace period
+          if (Date.now() > streamGracePeriodUntil) {
+            isRunning = false;
+            setStreamingUi(false);
+          }
         }
+      } catch (e) {
+        // backend might be temporarily offline
+      }
+    }
       } catch (e) {
         // backend might be temporarily offline
       }

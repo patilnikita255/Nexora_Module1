@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import traceback
 from typing import Dict, List, Optional
 
 import cv2
@@ -211,6 +212,7 @@ class VideoProcessor:
         # Skip frames for performance — process every Nth frame
         process_every_n = 2  # Process every 2nd frame for speed
         raw_count = 0
+        consecutive_read_failures = 0
 
         try:
             while self._running and self._cap and self._cap.isOpened():
@@ -221,19 +223,35 @@ class VideoProcessor:
                     if self._is_webcam:
                         time.sleep(0.05)
                         continue
+
+                    consecutive_read_failures += 1
+                    if consecutive_read_failures > 8:
+                        print(f"[Processor] Persistent read failure after {consecutive_read_failures} attempts. Stopping loop.")
+                        break
+
                     # Video file reached the end — loop back seamlessly
                     print("[Processor] End of video reached. Looping back to beginning.")
-                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    ret, frame = self._cap.read()
+                    self._tracker.reset()
+                    self._analyzer.reset()
+                    self._event_frame_buffer.clear()
+                    self.alert_manager.reset_cooldowns()
+
+                    if self._cap:
+                        self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, frame = self._cap.read()
+
                     if not ret and self._current_video_path and os.path.isfile(self._current_video_path):
                         # Seek failed (common on Windows MSMF backend) — re-open capture directly
-                        self._cap.release()
+                        if self._cap:
+                            self._cap.release()
                         self._cap = cv2.VideoCapture(self._current_video_path)
                         ret, frame = self._cap.read()
+
                     if not ret:
-                        time.sleep(0.04)
+                        time.sleep(0.05)
                         continue
 
+                consecutive_read_failures = 0
                 raw_count += 1
                 self._frame_count += 1
                 frame = self._preprocess_frame(frame)
@@ -334,7 +352,6 @@ class VideoProcessor:
                     self._latest_detections = detections
                     self._latest_tracked = tracked
 
-
                 # --- FPS calculation ---
                 elapsed = time.time() - t_start
                 frame_times.append(elapsed)
@@ -348,6 +365,10 @@ class VideoProcessor:
                     time.sleep(0.03)
                 else:
                     time.sleep(0.001)
+        except Exception as e:
+            self._init_error = f"Video loop error: {e}"
+            print(f"[Processor] ERROR in video loop: {e}")
+            traceback.print_exc()
         finally:
             if self._cap:
                 self._cap.release()
@@ -370,6 +391,11 @@ class VideoProcessor:
 
     @staticmethod
     def _event_key(event) -> str:
+        if event.event_type == AlertType.WEAPON_DETECTED:
+            primary = event.primary_object_id
+            if primary is None:
+                primary = event.involved_objects[0] if event.involved_objects else 0
+            return f"weapon_detected:{primary}"
         primary = event.primary_object_id
         if primary is None:
             primary = event.involved_objects[0] if event.involved_objects else -1
@@ -397,7 +423,7 @@ class VideoProcessor:
                 self._event_frame_buffer[key] = updated
 
         confirmed = []
-        weapon_confirm_frames = get_settings().weapon_confirm_frames
+        weapon_confirm_frames = self._settings.weapon_confirm_frames
         for key, event in event_by_key.items():
             req_frames = weapon_confirm_frames if event.event_type == AlertType.WEAPON_DETECTED else self._event_confirm_frames
             if self._event_frame_buffer.get(key, 0) >= req_frames:
