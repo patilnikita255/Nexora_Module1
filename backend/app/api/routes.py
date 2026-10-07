@@ -191,6 +191,7 @@ async def get_status(camera: Optional[str] = Query(default=None)):
     status = processor.get_status(mode=camera)
     # Add init_error to response if pipeline failed to start
     result = status.model_dump()
+    result["weapon_models"] = processor.get_weapon_model_status()
     if processor.init_error:
         result["init_error"] = processor.init_error
     return result

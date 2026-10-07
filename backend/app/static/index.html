@@ -931,7 +931,7 @@
       <!-- Controls Panel -->
       <div class="glass-card controls-card">
         <div class="file-input-wrapper">
-          <input type="file" id="videoFileInput" accept=".mp4,.avi,.mkv,.mov,.webm" onchange="handleFileUpload(event)">
+          <input type="file" id="videoFileInput" accept=".mp4,.avi,.mkv,.mov,.wmv,.webm" onchange="handleFileUpload(event)">
         </div>
 
         <div class="btn-group">
@@ -1026,6 +1026,8 @@
     let isRunning = false;
     let pollInterval = null;
     let streamGracePeriodUntil = 0;
+    let lastPipelineError = "";
+    let lastWeaponModelWarning = "";
 
     // Toast helper
     function showToast(msg) {
@@ -1096,7 +1098,7 @@
           method: "POST",
           body: formData
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.detail || "Upload failed");
         
         document.getElementById('loadingTitle').innerText = 'Starting AI Detection...';
@@ -1249,6 +1251,34 @@
         if (!res.ok) return;
         const data = await res.json();
 
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const weaponModels = data.weapon_models || {};
+        const firearmUnavailable = ['missing', 'load_failed', 'disabled'].includes(weaponModels.firearm_model_status);
+        const weaponWarning = firearmUnavailable ? weaponModels.firearm_model_message : '';
+        if (weaponWarning && lastWeaponModelWarning !== weaponWarning) {
+          lastWeaponModelWarning = weaponWarning;
+          showToast(weaponWarning);
+        } else if (!weaponWarning) {
+          lastWeaponModelWarning = '';
+        }
+        if (data.init_error) {
+          if (lastPipelineError !== data.init_error) {
+            lastPipelineError = data.init_error;
+            isRunning = false;
+            setStreamingUi(false);
+            showToast(`Video processing failed: ${data.init_error}`);
+          }
+          statusDot.classList.remove('active');
+          statusDot.style.background = 'var(--danger)';
+          statusText.innerText = 'ERROR';
+          statusText.title = data.init_error;
+          return;
+        }
+        lastPipelineError = "";
+        statusDot.style.background = '';
+        statusText.title = weaponWarning || (data.is_running ? 'Video processing is active' : 'Backend is ready; no video is processing');
+
         document.getElementById('statFps').innerText = (data.fps || 0).toFixed(1);
         document.getElementById('hudFps').innerText = (data.fps || 0).toFixed(1);
         document.getElementById('statObjects').innerText = data.object_count || 0;
@@ -1256,6 +1286,15 @@
         document.getElementById('statAlerts').innerText = data.alert_count || 0;
 
         if (data.is_running) {
+          if (firearmUnavailable) {
+            statusDot.classList.remove('active');
+            statusDot.style.background = 'var(--danger)';
+            statusText.innerText = 'DEGRADED';
+          } else {
+            statusDot.style.background = '';
+            statusDot.classList.add('active');
+            statusText.innerText = (data.fps > 0 || data.frame_count > 0) ? 'ONLINE' : 'STARTING';
+          }
           // If frames are being processed, ensure loading overlay is dismissed
           if (data.fps > 0 || data.frame_count > 0) {
             const loading = document.getElementById('loadingOverlay');
@@ -1273,13 +1312,17 @@
             isRunning = false;
             setStreamingUi(false);
           }
+        } else {
+          // A reachable backend with no active source is idle, not offline.
+          statusDot.classList.remove('active');
+          statusDot.style.background = firearmUnavailable ? 'var(--danger)' : '';
+          statusText.innerText = firearmUnavailable ? 'DEGRADED' : 'IDLE';
         }
       } catch (e) {
-        // backend might be temporarily offline
-      }
-    }
-      } catch (e) {
-        // backend might be temporarily offline
+        const statusDot = document.getElementById('statusDot');
+        statusDot.classList.remove('active');
+        document.getElementById('statusText').innerText = 'OFFLINE';
+        document.getElementById('statusText').title = 'Cannot reach the backend';
       }
     }
 

@@ -554,6 +554,50 @@ class VideoProcessor:
     def init_error(self) -> Optional[str]:
         return self._init_error
 
+    def get_weapon_model_status(self) -> Dict[str, object]:
+        """Report whether the weapon models are loaded or available to load."""
+        detector = self._detector
+        base_path = self._settings.yolo_model
+        base_exists = os.path.isfile(base_path)
+        gun_candidates = [
+            os.path.join(self._settings.weights_dir, "firearm_yolov8n.pt"),
+            os.path.join(os.path.dirname(base_path), "firearm_yolov8n.pt"),
+            os.path.join("backend", "weights", "firearm_yolov8n.pt"),
+            os.path.join("weights", "firearm_yolov8n.pt"),
+        ]
+        gun_exists = any(os.path.isfile(path) for path in gun_candidates)
+        gun_loaded = bool(detector and detector.gun_model is not None)
+
+        if not self._settings.enable_firearm_model:
+            gun_status = "disabled"
+            gun_message = "Firearm detection is disabled by configuration."
+        elif gun_loaded:
+            gun_status = "loaded"
+            gun_message = "Specialized firearm model is loaded."
+        elif detector is not None:
+            gun_status = detector.gun_model_status
+            gun_message = (
+                "Firearm detection is unavailable; firearm_yolov8n.pt "
+                "could not be loaded."
+            )
+        elif gun_exists:
+            gun_status = "not_initialized"
+            gun_message = "Firearm model is present but has not been initialized yet."
+        else:
+            gun_status = "missing"
+            gun_message = (
+                "Firearm detection is unavailable: firearm_yolov8n.pt is missing."
+            )
+
+        return {
+            "base_model_present": base_exists,
+            "base_model_loaded": detector is not None,
+            "knife_detection": "COCO class; may miss small, obscured, or unusual knives",
+            "firearm_model_status": gun_status,
+            "firearm_model_available": gun_loaded,
+            "firearm_model_message": gun_message,
+        }
+
     def generate_mjpeg(self, mode: str = "main"):
         """
         Generator that yields MJPEG frames continuously for streaming without failing.

@@ -72,11 +72,14 @@ class ObjectDetector:
 
         # 2. Fine-tuned lightweight gun model (runs on each processed frame)
         self.gun_model = None
+        self.gun_model_path: Optional[str] = None
+        self.gun_model_status = "disabled"
         self.gun_interval = 1
         self._frame_index = 0
         self._cached_gun_detections: List[Detection] = []
 
         if settings.enable_firearm_model:
+            self.gun_model_status = "missing"
             gun_candidates = [
                 os.path.join(settings.weights_dir, "firearm_yolov8n.pt"),
                 os.path.join(os.path.dirname(model_path), "firearm_yolov8n.pt"),
@@ -88,10 +91,23 @@ class ObjectDetector:
                     try:
                         self.gun_model = YOLO(gp)
                         self.gun_model.to(self.device)
+                        self.gun_model_path = gp
+                        self.gun_model_status = "loaded"
                         print(f"[Detector] Loaded fine-tuned gun model from: {gp}")
                         break
                     except Exception as e:
+                        self.gun_model_status = "load_failed"
                         print(f"[Detector] Could not load gun model from {gp}: {e}")
+
+            if self.gun_model is None:
+                if not any(os.path.isfile(path) for path in gun_candidates):
+                    self.gun_model_status = "missing"
+                print(
+                    "[Detector] WARNING: firearm detection is unavailable "
+                    f"(model status: {self.gun_model_status}; expected firearm_yolov8n.pt "
+                    f"under {settings.weights_dir}). Knife detection only is active "
+                    "through the base COCO model."
+                )
 
     @staticmethod
     def _resolve_device(device_setting: str) -> str:

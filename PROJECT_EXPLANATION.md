@@ -1,3 +1,9 @@
+.\.venv\Scripts\Activate.ps1
+
+python -m uvicorn app.main:app --reload
+
+
+
 # AI-Based Intelligent Video Surveillance System
 ## Complete Technical Documentation, Architecture & Teacher Presentation Guide
 
